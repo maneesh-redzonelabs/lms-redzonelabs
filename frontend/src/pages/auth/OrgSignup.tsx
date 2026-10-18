@@ -1,0 +1,192 @@
+import React, { useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import * as authApi from '../../api/auth';
+import { ApiError } from '../../api/client';
+import { useReferenceData } from '../../hooks/useReferenceData';
+
+type Step = 'form' | 'otp' | 'done';
+
+export default function OrgSignup() {
+  const navigate = useNavigate();
+  const industries = useReferenceData('industries');
+  const plans = useReferenceData('subscriptionPlans');
+
+  const [step, setStep] = useState<Step>('form');
+  const [onboardingId, setOnboardingId] = useState<string | null>(null);
+  const [resultOrgSlug, setResultOrgSlug] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const [form, setForm] = useState({
+    orgName: '',
+    industry: '',
+    country: 'India',
+    timezone: 'Asia/Kolkata',
+    subscriptionPlan: '',
+    contactName: '',
+    contactMobile: '',
+    contactEmail: '',
+  });
+
+  const [mobileOtp, setMobileOtp] = useState('');
+  const [emailOtp, setEmailOtp] = useState('');
+
+  function update<K extends keyof typeof form>(key: K, value: string) {
+    setForm((f) => ({ ...f, [key]: value }));
+  }
+
+  async function handleStart(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setBusy(true);
+    try {
+      const result = await authApi.onboardingStart(form);
+      setOnboardingId(result.id);
+      setStep('otp');
+    } catch (err) {
+      if (err instanceof ApiError) {
+        if (err.code === 'DUPLICATE_MOBILE') setError('An organization is already registered with this mobile number.');
+        else setError(err.message);
+      } else setError('Could not start onboarding. Please try again.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleResend() {
+    if (!onboardingId) return;
+    setError(null);
+    try {
+      await authApi.onboardingResendOtp(onboardingId);
+    } catch (err) {
+      if (err instanceof ApiError) setError(err.message);
+    }
+  }
+
+  async function handleVerify(e: React.FormEvent) {
+    e.preventDefault();
+    if (!onboardingId) return;
+    setError(null);
+    setBusy(true);
+    try {
+      const result = await authApi.onboardingVerify(onboardingId, { mobileOtp, emailOtp });
+      setResultOrgSlug(result.orgSlug);
+      setStep('done');
+    } catch (err) {
+      if (err instanceof ApiError) {
+        if (err.code === 'TOO_MANY_ATTEMPTS') setError('Too many incorrect attempts. Request a new code and try again.');
+        else setError(err.message);
+      } else setError('Verification failed.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <main className="auth-main">
+      <div className="auth-card">
+        <div className="mobile-brand">
+          <div className="brand-logo-frame">
+            <svg width="26" height="20" viewBox="0 0 24 24" fill="none" stroke="#9a7440" strokeWidth="2">
+              <path d="M3 21h18M5 21V7l7-4 7 4v14" />
+            </svg>
+          </div>
+          <strong>RedZone Labs</strong>
+        </div>
+        <div className="eyebrow">New organization</div>
+        <h2>Set up your Lead Management account</h2>
+
+        {step === 'form' && (
+          <form onSubmit={handleStart}>
+            <div className="field">
+              <label htmlFor="orgName">Organization name</label>
+              <input id="orgName" className="input" required value={form.orgName} onChange={(e) => update('orgName', e.target.value)} />
+            </div>
+            <div className="form-grid">
+              <div className="field">
+                <label htmlFor="industry">Industry</label>
+                <select id="industry" className="input" required value={form.industry} onChange={(e) => update('industry', e.target.value)}>
+                  <option value="">Select…</option>
+                  {(industries.data ?? []).map((o) => <option key={o.code} value={o.code}>{o.label}</option>)}
+                </select>
+              </div>
+              <div className="field">
+                <label htmlFor="plan">Subscription plan</label>
+                <select id="plan" className="input" required value={form.subscriptionPlan} onChange={(e) => update('subscriptionPlan', e.target.value)}>
+                  <option value="">Select…</option>
+                  {(plans.data ?? []).map((o) => <option key={o.code} value={o.code}>{o.label}</option>)}
+                </select>
+              </div>
+              <div className="field">
+                <label htmlFor="country">Country</label>
+                <input id="country" className="input" required value={form.country} onChange={(e) => update('country', e.target.value)} />
+              </div>
+              <div className="field">
+                <label htmlFor="timezone">Timezone</label>
+                <input id="timezone" className="input" required value={form.timezone} onChange={(e) => update('timezone', e.target.value)} />
+              </div>
+              <div className="field">
+                <label htmlFor="contactName">Your name</label>
+                <input id="contactName" className="input" required value={form.contactName} onChange={(e) => update('contactName', e.target.value)} />
+              </div>
+              <div className="field">
+                <label htmlFor="contactMobile">Your mobile number</label>
+                <input id="contactMobile" className="input" required value={form.contactMobile} onChange={(e) => update('contactMobile', e.target.value)} />
+              </div>
+              <div className="field">
+                <label htmlFor="contactEmail">Your email</label>
+                <input id="contactEmail" type="email" className="input" required value={form.contactEmail} onChange={(e) => update('contactEmail', e.target.value)} />
+              </div>
+            </div>
+            {error && <div className="alert alert-error">{error}</div>}
+            <div className="form-actions">
+              <button type="submit" className="btn btn-primary" disabled={busy}>
+                {busy ? 'Starting…' : 'Create organization'}
+              </button>
+            </div>
+          </form>
+        )}
+
+        {step === 'otp' && (
+          <form onSubmit={handleVerify}>
+            <div className="auth-note">
+              Dev mode: verification codes are not sent by SMS/email in this build — check the
+              <b> backend server console</b> for your mobile and email OTPs.
+            </div>
+            <div className="field">
+              <label htmlFor="mobileOtp">Mobile OTP</label>
+              <input id="mobileOtp" className="input" required value={mobileOtp} onChange={(e) => setMobileOtp(e.target.value)} />
+            </div>
+            <div className="field">
+              <label htmlFor="emailOtp">Email OTP</label>
+              <input id="emailOtp" className="input" required value={emailOtp} onChange={(e) => setEmailOtp(e.target.value)} />
+            </div>
+            {error && <div className="alert alert-error">{error}</div>}
+            <div className="form-actions">
+              <button type="button" className="btn" onClick={handleResend} disabled={busy}>Resend codes</button>
+              <button type="submit" className="btn btn-primary" disabled={busy}>
+                {busy ? 'Verifying…' : 'Verify & activate'}
+              </button>
+            </div>
+          </form>
+        )}
+
+        {step === 'done' && (
+          <div>
+            <div className="alert alert-info">
+              Your organization{resultOrgSlug ? ` (${resultOrgSlug})` : ''} has been created. You can now sign in with your
+              registered mobile number.
+            </div>
+            <div className="form-actions">
+              <button className="btn btn-primary" onClick={() => navigate('/login')}>Go to sign in</button>
+            </div>
+          </div>
+        )}
+
+        <div className="auth-footer">
+          Already have an account? <Link to="/login">Sign in</Link>
+        </div>
+      </div>
+    </main>
+  );
+}

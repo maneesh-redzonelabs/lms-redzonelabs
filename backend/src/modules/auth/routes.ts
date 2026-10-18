@@ -1,0 +1,390 @@
+import { FastifyInstance } from 'fastify';
+import bcrypt from 'bcrypt';
+import { z } from 'zod';
+import { withTransaction } from '../../db/pool';
+import { parseOrThrow } from '../../utils/validate';
+import { Errors } from '../../utils/errors';
+import { allow, RateLimits } from '../../middleware/rateLimit';
+import { randomToken, sha256Hex } from '../../utils/tokens';
+import {
+  authenticate,
+  issueStepUpToken,
+  signAccessToken,
+  verifyAccessToken,
+  verifyImpersonationToken
+} from '../../middleware/auth';
+import { writeAuditLog } from '../../services/audit';
+import { env } from '../../config/env';
+import { loginSchema, logoutSchema, refreshSchema, resolveOrgSchema, stepUpSchema } from './schemas';
+
+// In-memory refresh-token store for the dev-mode platform-admin pseudo-account, which is not
+// backed by a row in `users`/`organizations` and therefore cannot use `user_sessions`.
+const platformAdminSessions = new Map<string, { expiresAt: number }>();
+
+// frontend/src/api/types.ts User (consumed via AuthSession.user and GET /auth/me) expects
+// { id, name, mobile, email, role, status, reportsTo, orgId, createdAt } — not the raw
+// userId/fullName/managerId column names.
+function userProfile(row: any) {
+  return {
+    id: row.user_id,
+    orgId: row.org_id,
+    name: row.full_name,
+    mobile: row.mobile,
+    email: row.email,
+    role: row.role_name,
+    status: row.is_active === false ? 'inactive' : 'active',
+    reportsTo: row.manager_id,
+    createdAt: row.created_at,
+    viewScope: row.view_scope,
+    userType: row.user_type,
+    companyName: row.company_name
+  };
+}
+
+export default async function authRoutes(app: FastifyInstance) {
+  app.post('/resolve-org', async (req) => {
+    const body = parseOrThrow(resolveOrgSchema, req.body);
+    const org = await withTransaction(async (client) => {
+      const result = await client.query(`SELECT * FROM fn_get_org_by_slug($1)`, [body.slugOrDomain]);
+      if (result.rows.length === 0) return null;
+      const extra = await client.query(`SELECT logo_url, org_slug FROM organizations WHERE org_id = $1`, [
+        result.rows[0].org_id
+      ]);
+      return { ...result.rows[0], ...extra.rows[0] };
+    });
+    if (!org) throw Errors.notFound('Organization not found');
+    return {
+      data: {
+        orgId: org.org_id,
+        orgName: org.org_name,
+        orgSlug: org.org_slug,
+        isActive: org.is_active,
+        subscriptionStatus: org.subscription_status,
+        trialEndsAt: org.trial_ends_at,
+        onboardingComplete: org.onboarding_complete,
+        timezone: org.timezone,
+        logoUrl: org.logo_url
+      }
+    };
+  });
+
+  app.post('/login', async (req) => {
+    const ip = req.ip;
+    if (!allow(`login:${ip}`, RateLimits.LOGIN_PER_IP.windowMs, RateLimits.LOGIN_PER_IP.max)) {
+      throw Errors.rateLimited('Too many login attempts from this IP, please wait a minute');
+    }
+    const body = parseOrThrow(loginSchema, req.body);
+
+    // Dev-mode platform-admin login, cross-tenant, not tied to any org/user row.
+    if (body.mobile === env.platformAdminMobile) {
+      if (body.password !== env.platformAdminPassword) throw Errors.invalidCredentials();
+      const refreshToken = randomToken();
+      const hash = sha256Hex(refreshToken);
+      platformAdminSessions.set(hash, { expiresAt: Date.now() + env.refreshTokenTtlDays * 86400000 });
+      const accessToken = signAccessToken({
+        sub: 0,
+        org_id: null,
+        role: 'platformadmin',
+        view_scope: null,
+        user_type: null,
+        jti: hash
+      });
+      return {
+        data: {
+          accessToken,
+          refreshToken,
+          expiresIn: env.accessTokenTtlMin * 60,
+          user: { id: 0, orgId: null, name: 'Platform Admin', role: 'platformadmin', status: 'active' }
+        }
+      };
+    }
+
+    if (!body.orgId) throw Errors.validation({ orgId: 'orgId is required' });
+    const orgId: number = body.orgId;
+
+    const result = await withTransaction(async (client) => {
+      const orgRes = await client.query(`SELECT * FROM organizations WHERE org_id = $1`, [orgId]);
+      if (orgRes.rows.length === 0) throw Errors.invalidCredentials();
+      const org = orgRes.rows[0];
+
+      const failCount = await client.query(`SELECT fn_failed_login_count($1, $2, 15) AS c`, [orgId, body.mobile]);
+      if (Number(failCount.rows[0].c) >= 5) {
+        throw Errors.tooManyAttempts('Too many failed attempts. Try again after 15 minutes.');
+      }
+
+      const userRes = await client.query(
+        `SELECT au.user_id, au.org_id, au.mobile, au.password_hash, au.role_id, au.is_active,
+                r.role_name, r.view_scope, u.full_name, u.email, u.user_type, u.company_name, u.manager_id, u.created_at
+         FROM vw_auth_users au
+         JOIN ref_roles r ON r.role_id = au.role_id
+         JOIN users u ON u.user_id = au.user_id
+         WHERE au.org_id = $1 AND au.mobile = $2`,
+        [orgId, body.mobile]
+      );
+
+      const recordAttempt = async (success: boolean, reason: string | null) => {
+        await client.query(
+          `INSERT INTO login_attempts (org_id, mobile, ip_address, success, failure_reason) VALUES ($1,$2,$3,$4,$5)`,
+          [orgId, body.mobile, ip, success, reason]
+        );
+      };
+
+      if (userRes.rows.length === 0) {
+        await recordAttempt(false, 'not_found');
+        throw Errors.invalidCredentials();
+      }
+      const u = userRes.rows[0];
+
+      if (!org.is_active || ['suspended', 'cancelled'].includes(org.subscription_status)) {
+        await recordAttempt(false, 'org_suspended');
+        throw Errors.tenantSuspended();
+      }
+
+      if (!u.is_active) {
+        await recordAttempt(false, 'inactive_account');
+        throw Errors.invalidCredentials();
+      }
+
+      const ok = await bcrypt.compare(body.password, u.password_hash);
+      if (!ok) {
+        await recordAttempt(false, 'wrong_password');
+        throw Errors.invalidCredentials();
+      }
+
+      await recordAttempt(true, null);
+      await client.query(`UPDATE users SET last_login_at = CURRENT_TIMESTAMP WHERE user_id = $1`, [u.user_id]);
+
+      const refreshToken = randomToken();
+      const sessionId = sha256Hex(refreshToken);
+      const expiresAt = new Date(Date.now() + env.refreshTokenTtlDays * 86400000);
+      await client.query(
+        `INSERT INTO user_sessions (session_id, org_id, user_id, device_type, ip_address, user_agent, expires_at, last_active_at, is_active)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,CURRENT_TIMESTAMP,TRUE)`,
+        [sessionId, orgId, u.user_id, 'desktop', ip, req.headers['user-agent'] ?? null, expiresAt]
+      );
+
+      const accessToken = signAccessToken({
+        sub: u.user_id,
+        org_id: orgId,
+        role: u.role_name,
+        view_scope: u.view_scope,
+        user_type: u.user_type,
+        jti: sessionId
+      });
+
+      await writeAuditLog(client, {
+        orgId: orgId,
+        userId: u.user_id,
+        action: 'LOGIN',
+        tableName: 'users',
+        recordId: u.user_id,
+        ipAddress: ip,
+        sessionId
+      });
+
+      return { accessToken, refreshToken, user: userProfile(u) };
+    });
+
+    return { data: { ...result, expiresIn: env.accessTokenTtlMin * 60 } };
+  });
+
+  app.post('/refresh', async (req) => {
+    const body = parseOrThrow(refreshSchema, req.body);
+    const hash = sha256Hex(body.refreshToken);
+
+    if (platformAdminSessions.has(hash)) {
+      const session = platformAdminSessions.get(hash)!;
+      if (session.expiresAt < Date.now()) {
+        platformAdminSessions.delete(hash);
+        throw Errors.tokenExpired();
+      }
+      platformAdminSessions.delete(hash);
+      const newRefresh = randomToken();
+      const newHash = sha256Hex(newRefresh);
+      platformAdminSessions.set(newHash, { expiresAt: Date.now() + env.refreshTokenTtlDays * 86400000 });
+      const accessToken = signAccessToken({
+        sub: 0,
+        org_id: null,
+        role: 'platformadmin',
+        view_scope: null,
+        user_type: null,
+        jti: newHash
+      });
+      return { data: { accessToken, refreshToken: newRefresh, expiresIn: env.accessTokenTtlMin * 60 } };
+    }
+
+    const result = await withTransaction(async (client) => {
+      const sessRes = await client.query(
+        `SELECT s.session_id, s.org_id, s.user_id, u.full_name, r.role_name, r.view_scope, u.user_type
+         FROM user_sessions s
+         JOIN users u ON u.user_id = s.user_id
+         JOIN ref_roles r ON r.role_id = u.role_id
+         WHERE s.session_id = $1 AND s.is_active = TRUE AND s.expires_at > CURRENT_TIMESTAMP`,
+        [hash]
+      );
+      if (sessRes.rows.length === 0) throw Errors.tokenExpired();
+      const s = sessRes.rows[0];
+
+      const newRefresh = randomToken();
+      const newHash = sha256Hex(newRefresh);
+      const expiresAt = new Date(Date.now() + env.refreshTokenTtlDays * 86400000);
+      await client.query(
+        `UPDATE user_sessions SET session_id = $1, expires_at = $2, last_active_at = CURRENT_TIMESTAMP WHERE session_id = $3`,
+        [newHash, expiresAt, hash]
+      );
+
+      const accessToken = signAccessToken({
+        sub: s.user_id,
+        org_id: s.org_id,
+        role: s.role_name,
+        view_scope: s.view_scope,
+        user_type: s.user_type,
+        jti: newHash
+      });
+      return { accessToken, refreshToken: newRefresh };
+    });
+
+    return { data: { ...result, expiresIn: env.accessTokenTtlMin * 60 } };
+  });
+
+  app.post('/logout', { preHandler: authenticate }, async (req) => {
+    const body = parseOrThrow(logoutSchema, req.body ?? {});
+    const user = req.authUser!;
+
+    if (user.isPlatformAdmin) {
+      platformAdminSessions.delete(user.sessionId);
+      return { data: { loggedOut: true } };
+    }
+
+    await withTransaction(async (client) => {
+      if (body.everywhere) {
+        await client.query(`UPDATE user_sessions SET is_active = FALSE WHERE user_id = $1 AND org_id = $2`, [
+          user.userId,
+          user.orgId
+        ]);
+      } else {
+        await client.query(`UPDATE user_sessions SET is_active = FALSE WHERE session_id = $1`, [user.sessionId]);
+      }
+      await writeAuditLog(client, {
+        orgId: user.orgId,
+        userId: user.userId,
+        action: 'LOGOUT',
+        tableName: 'users',
+        recordId: user.userId,
+        ipAddress: req.ip,
+        sessionId: user.sessionId
+      });
+    });
+    return { data: { loggedOut: true } };
+  });
+
+  app.post('/step-up', { preHandler: authenticate }, async (req) => {
+    const body = parseOrThrow(stepUpSchema, req.body);
+    const user = req.authUser!;
+    if (user.isPlatformAdmin || user.orgId === null) throw Errors.forbiddenRole('Step-up not applicable');
+
+    const token = await withTransaction(async (client) => {
+      const res = await client.query(`SELECT password_hash FROM vw_auth_users WHERE user_id = $1 AND org_id = $2`, [
+        user.userId,
+        user.orgId
+      ]);
+      if (res.rows.length === 0) throw Errors.invalidCredentials();
+      const ok = await bcrypt.compare(body.password, res.rows[0].password_hash);
+      if (!ok) throw Errors.invalidCredentials();
+      return issueStepUpToken(user.userId, user.orgId as number);
+    });
+
+    return { data: { stepUpToken: token, expiresIn: 300 } };
+  });
+
+  app.post('/exchange-impersonation', async (req) => {
+    const body = parseOrThrow(z.object({ token: z.string().min(10) }).strict(), req.body);
+    const { userId, orgId } = verifyImpersonationToken(body.token);
+
+    const result = await withTransaction(async (client) => {
+      const userRes = await client.query(
+        `SELECT u.user_id, u.org_id, u.full_name, u.mobile, u.email, u.user_type, u.company_name, u.manager_id,
+                u.is_active, u.created_at, r.role_name, r.view_scope
+         FROM users u JOIN ref_roles r ON r.role_id = u.role_id
+         WHERE u.user_id = $1 AND u.org_id = $2 AND u.is_active = TRUE`,
+        [userId, orgId]
+      );
+      if (userRes.rows.length === 0) throw Errors.notFound('Impersonation target not found or inactive');
+      const u = userRes.rows[0];
+
+      const refreshToken = randomToken();
+      const sessionId = sha256Hex(refreshToken);
+      const expiresAt = new Date(Date.now() + env.refreshTokenTtlDays * 86400000);
+      await client.query(
+        `INSERT INTO user_sessions (session_id, org_id, user_id, device_type, ip_address, user_agent, expires_at, last_active_at, is_active)
+         VALUES ($1,$2,$3,'desktop',$4,$5,$6,CURRENT_TIMESTAMP,TRUE)`,
+        [sessionId, orgId, u.user_id, req.ip, req.headers['user-agent'] ?? null, expiresAt]
+      );
+
+      const accessToken = signAccessToken({
+        sub: u.user_id,
+        org_id: orgId,
+        role: u.role_name,
+        view_scope: u.view_scope,
+        user_type: u.user_type,
+        jti: sessionId
+      });
+
+      await writeAuditLog(client, {
+        orgId,
+        userId: u.user_id,
+        action: 'LOGIN',
+        tableName: 'users',
+        recordId: u.user_id,
+        newValues: { via: 'platform-admin-impersonation' },
+        ipAddress: req.ip,
+        sessionId
+      });
+
+      return { accessToken, refreshToken, user: userProfile(u) };
+    });
+
+    return { data: { ...result, expiresIn: env.accessTokenTtlMin * 60 } };
+  });
+
+  app.get('/me', { preHandler: authenticate }, async (req) => {
+    const user = req.authUser!;
+    if (user.isPlatformAdmin) {
+      return {
+        data: {
+          id: 0,
+          orgId: null,
+          name: 'Platform Admin',
+          role: 'platformadmin',
+          status: 'active',
+          viewScope: null,
+          permissions: { canCreateUsers: true, canCreateProjects: true, isPlatformAdmin: true }
+        }
+      };
+    }
+    const data = await withTransaction(async (client) => {
+      const res = await client.query(
+        `SELECT u.user_id, u.org_id, u.full_name, u.mobile, u.email, u.user_type, u.company_name, u.manager_id,
+                u.is_active, u.created_at, r.role_id, r.role_name, r.view_scope, r.can_create_users, r.can_create_projects
+         FROM users u JOIN ref_roles r ON r.role_id = u.role_id
+         WHERE u.user_id = $1 AND u.org_id = $2`,
+        [user.userId, user.orgId]
+      );
+      if (res.rows.length === 0) throw Errors.notFound('User not found');
+      const u = res.rows[0];
+      return {
+        ...userProfile(u),
+        permissions: {
+          canCreateUsers: u.can_create_users,
+          canCreateProjects: u.can_create_projects,
+          canManageAllocations: ['accountadmin', 'owner'].includes(u.role_name),
+          canDeleteLeads: ['accountadmin', 'owner'].includes(u.role_name),
+          isPlatformAdmin: false
+        }
+      };
+    });
+    return { data };
+  });
+}
+
+export { verifyAccessToken };
