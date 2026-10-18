@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import * as authApi from '../../api/auth';
 import { ApiError } from '../../api/client';
 import { useReferenceData } from '../../hooks/useReferenceData';
+import { validateEmail, validateMobile } from '../../utils/validators';
 
 type Step = 'form' | 'otp' | 'done';
 
@@ -38,6 +39,16 @@ export default function OrgSignup() {
   async function handleStart(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    const mobileError = validateMobile(form.contactMobile);
+    if (mobileError) {
+      setError(mobileError);
+      return;
+    }
+    const emailError = validateEmail(form.contactEmail, true);
+    if (emailError) {
+      setError(emailError);
+      return;
+    }
     setBusy(true);
     try {
       const result = await authApi.onboardingStart(form);

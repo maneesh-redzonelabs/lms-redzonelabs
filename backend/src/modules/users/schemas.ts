@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { mobileSchema, nullableEmailSchema, optionalEmailSchema } from '../../utils/validators';
 
 export const listUsersQuerySchema = z
   .object({
@@ -18,8 +19,8 @@ export const listUsersQuerySchema = z
 export const createUserSchema = z
   .object({
     name: z.string().min(2).max(100),
-    mobile: z.string().regex(/^\d{10}$/),
-    email: z.string().email().optional().or(z.literal('')),
+    mobile: mobileSchema,
+    email: optionalEmailSchema,
     role: z.enum(['owner', 'manager', 'member']),
     reportsTo: z.coerce.number().int().positive().nullable().optional(),
     userType: z.enum(['Internal', 'External']).optional(),
@@ -35,7 +36,7 @@ export const createUserSchema = z
 export const updateUserSchema = z
   .object({
     name: z.string().min(2).max(100).optional(),
-    email: z.string().email().nullable().optional(),
+    email: nullableEmailSchema,
     role: z.enum(['owner', 'manager', 'member']).optional(),
     reportsTo: z.coerce.number().int().positive().nullable().optional(),
     userType: z.enum(['Internal', 'External']).optional(),

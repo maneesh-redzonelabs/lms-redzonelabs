@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { emailSchema, mobileSchema } from '../../utils/validators';
 
 export const startSchema = z
   .object({
@@ -8,8 +9,8 @@ export const startSchema = z
     timezone: z.string().min(2).max(60),
     subscriptionPlan: z.enum(['trial', 'starter', 'professional', 'enterprise']),
     contactName: z.string().min(2).max(100),
-    mobile: z.string().regex(/^\d{10}$/),
-    email: z.string().email()
+    mobile: mobileSchema,
+    email: emailSchema
   })
   .strict();
 

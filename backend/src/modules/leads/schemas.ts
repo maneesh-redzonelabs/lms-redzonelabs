@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { mobileSchema, nullableEmailSchema, optionalEmailSchema } from '../../utils/validators';
 
 // NOTE on field names: the frontend (frontend/src/api/leads.ts, LeadFormModal.tsx,
 // LeadDetailModal.tsx) sends `name`, `projectId` (string from a <select>), `budgetRange` /
@@ -9,8 +10,8 @@ import { z } from 'zod';
 export const createLeadSchema = z
   .object({
     name: z.string().min(2).max(100),
-    mobile: z.string().regex(/^\d{10}$/),
-    email: z.string().email().optional().or(z.literal('')),
+    mobile: mobileSchema,
+    email: optionalEmailSchema,
     projectId: z.coerce.number().int().positive().optional(),
     budgetRange: z.string().max(25).optional().or(z.literal('')),
     timeline: z.string().max(30).optional().or(z.literal('')),
@@ -27,7 +28,7 @@ export const createLeadSchema = z
 export const updateLeadSchema = z
   .object({
     name: z.string().min(2).max(100).optional(),
-    email: z.string().email().nullable().optional(),
+    email: nullableEmailSchema,
     projectId: z.coerce.number().int().positive().nullable().optional(),
     budgetRange: z.string().max(25).nullable().optional(),
     timeline: z.string().max(30).nullable().optional(),

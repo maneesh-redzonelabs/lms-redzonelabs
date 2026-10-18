@@ -1,11 +1,12 @@
 import { z } from 'zod';
+import { mobileSchema } from '../../utils/validators';
 
 export const resolveOrgSchema = z.object({ slugOrDomain: z.string().min(1).max(100) }).strict();
 
 export const loginSchema = z
   .object({
     orgId: z.number().int().positive().optional(),
-    mobile: z.string().regex(/^\d{10}$/, 'mobile must be a 10-digit number'),
+    mobile: mobileSchema,
     password: z.string().min(1)
   })
   .strict();

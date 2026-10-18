@@ -6,6 +6,7 @@ import { Modal } from '../../components/Modal';
 import { useReferenceData } from '../../hooks/useReferenceData';
 import { useToast } from '../../components/Toast';
 import { ApiError } from '../../api/client';
+import { validateEmail, validateMobile } from '../../utils/validators';
 
 export function LeadFormModal({ onClose }: { onClose: () => void }) {
   const queryClient = useQueryClient();
@@ -34,9 +35,25 @@ export function LeadFormModal({ onClose }: { onClose: () => void }) {
     },
   });
 
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    const mobileError = validateMobile(form.mobile);
+    if (mobileError) {
+      setError(mobileError);
+      return;
+    }
+    const emailError = validateEmail(form.email, false);
+    if (emailError) {
+      setError(emailError);
+      return;
+    }
+    setError(null);
+    mutation.mutate();
+  }
+
   return (
     <Modal title="Add lead" onClose={onClose}>
-      <form onSubmit={(e) => { e.preventDefault(); mutation.mutate(); }}>
+      <form onSubmit={handleSubmit}>
         <div className="form-grid">
           <div className="field">
             <label>Name</label>

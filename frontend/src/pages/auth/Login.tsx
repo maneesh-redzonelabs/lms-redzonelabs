@@ -3,6 +3,7 @@ import { useLocation, useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import * as authApi from '../../api/auth';
 import { ApiError } from '../../api/client';
+import { validateMobile } from '../../utils/validators';
 
 const PLATFORM_ADMIN_MOBILE = '9811295123';
 
@@ -25,6 +26,11 @@ export default function Login() {
   async function handleResolveOrg(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    const mobileError = validateMobile(mobile);
+    if (mobileError) {
+      setError(mobileError);
+      return;
+    }
     setBusy(true);
     try {
       if (mobile.trim() === PLATFORM_ADMIN_MOBILE) {

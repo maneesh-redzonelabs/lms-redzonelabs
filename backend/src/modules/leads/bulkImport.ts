@@ -11,10 +11,11 @@ import { Errors } from '../../utils/errors';
 import { allow, RateLimits } from '../../middleware/rateLimit';
 import { writeAuditLog } from '../../services/audit';
 import { CachedImportRow, dropImport, getImport, storeImport } from './bulkImportCache';
+import { EMAIL_REGEX, MOBILE_REGEX } from '../../utils/validators';
 
 const MAX_ROWS = 5000;
-const MOBILE_RE = /^\d{10}$/;
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const MOBILE_RE = MOBILE_REGEX;
+const EMAIL_RE = EMAIL_REGEX;
 
 const TEMPLATE_HEADERS = [
   'Full Name',
@@ -113,7 +114,7 @@ export default function registerBulkImportRoutes(app: FastifyInstance) {
         const remarks = normalize(raw['Remarks'] ?? raw['remarks']) || null;
 
         if (!fullName) errors.push('Full Name is required');
-        if (!MOBILE_RE.test(mobile)) errors.push('Mobile must be a 10-digit number');
+        if (!MOBILE_RE.test(mobile)) errors.push('Mobile must be a valid 10-digit Indian mobile number');
         if (email && !EMAIL_RE.test(email)) errors.push('Email is not a valid email address');
 
         const projectId = projectName ? fuzzyMatch(projectName, projects.rows) : null;

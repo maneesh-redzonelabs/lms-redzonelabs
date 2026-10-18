@@ -8,6 +8,7 @@ import { Modal } from '../../components/Modal';
 import { useReferenceData } from '../../hooks/useReferenceData';
 import { useToast } from '../../components/Toast';
 import { ApiError } from '../../api/client';
+import { validateEmail, validateMobile } from '../../utils/validators';
 
 export default function Users() {
   const [search, setSearch] = useState('');
@@ -111,9 +112,27 @@ function UserFormModal({ user, onClose }: { user: User | null; onClose: () => vo
     },
   });
 
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!user) {
+      const mobileError = validateMobile(form.mobile);
+      if (mobileError) {
+        setError(mobileError);
+        return;
+      }
+    }
+    const emailError = validateEmail(form.email, false);
+    if (emailError) {
+      setError(emailError);
+      return;
+    }
+    setError(null);
+    mutation.mutate();
+  }
+
   return (
     <Modal title={user ? 'Edit user' : 'Add user'} onClose={onClose}>
-      <form onSubmit={(e) => { e.preventDefault(); mutation.mutate(); }}>
+      <form onSubmit={handleSubmit}>
         <div className="form-grid">
           <div className="field">
             <label>Name</label>
