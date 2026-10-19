@@ -1,37 +1,52 @@
 import { api } from './client';
 import type { AuthSession, User } from './types';
 
-export function resolveOrg(input: { mobile?: string; orgSlug?: string }) {
-  return api.post<{ orgId: string; orgName: string; orgSlug: string }>(
+// Every backend route wraps its payload as `{ data: ... }` (see backend's AppError/success
+// envelope convention). apiRequest() in client.ts intentionally does NOT unwrap this generically,
+// because paginated list endpoints return `{ data: T[], meta }` and callers rely on both fields
+// as-is (see Paginated<T> in client.ts). Single-object endpoints like these auth ones need their
+// own unwrap, done here.
+interface Envelope<T> {
+  data: T;
+}
+
+export async function resolveOrg(input: { mobile?: string; orgSlug?: string }) {
+  const res = await api.post<Envelope<{ orgId: string; orgName: string; orgSlug: string }>>(
     '/auth/resolve-org',
     input,
     { skipAuth: true }
   );
+  return res.data;
 }
 
 // Login is mobile + OTP for every role (no password).
-export function sendLoginOtp(input: { mobile: string }) {
-  return api.post<{ sent: boolean }>('/auth/otp/send', input, { skipAuth: true });
+export async function sendLoginOtp(input: { mobile: string }) {
+  const res = await api.post<Envelope<{ sent: boolean }>>('/auth/otp/send', input, { skipAuth: true });
+  return res.data;
 }
 
-export function verifyLoginOtp(input: { mobile: string; otp: string }) {
-  return api.post<AuthSession>('/auth/otp/verify', input, { skipAuth: true });
+export async function verifyLoginOtp(input: { mobile: string; otp: string }) {
+  const res = await api.post<Envelope<AuthSession>>('/auth/otp/verify', input, { skipAuth: true });
+  return res.data;
 }
 
-export function refresh(refreshToken: string) {
-  return api.post<AuthSession>('/auth/refresh', { refreshToken }, { skipAuth: true });
+export async function refresh(refreshToken: string) {
+  const res = await api.post<Envelope<AuthSession>>('/auth/refresh', { refreshToken }, { skipAuth: true });
+  return res.data;
 }
 
-export function logout() {
-  return api.post<void>('/auth/logout');
+export async function logout() {
+  await api.post<Envelope<{ loggedOut: boolean }>>('/auth/logout');
 }
 
-export function stepUp(input: { password: string }) {
-  return api.post<{ stepUpToken: string; expiresAt?: string }>('/auth/step-up', input);
+export async function stepUp(input: { password: string }) {
+  const res = await api.post<Envelope<{ stepUpToken: string; expiresIn: number }>>('/auth/step-up', input);
+  return res.data;
 }
 
-export function me() {
-  return api.get<User>('/auth/me');
+export async function me() {
+  const res = await api.get<Envelope<User>>('/auth/me');
+  return res.data;
 }
 
 // Self-service onboarding (public, no auth)
@@ -46,18 +61,24 @@ export interface OnboardingStartInput {
   contactEmail: string;
 }
 
-export function onboardingStart(input: OnboardingStartInput) {
-  return api.post<{ id: string }>('/onboarding/start', input, { skipAuth: true });
+export async function onboardingStart(input: OnboardingStartInput) {
+  const res = await api.post<Envelope<{ verificationId: string; expiresAt: string }>>(
+    '/onboarding/start',
+    input,
+    { skipAuth: true }
+  );
+  return { id: res.data.verificationId, expiresAt: res.data.expiresAt };
 }
 
-export function onboardingResendOtp(id: string) {
-  return api.post<void>(`/onboarding/${id}/resend-otp`, undefined, { skipAuth: true });
+export async function onboardingResendOtp(id: string) {
+  await api.post<Envelope<{ expiresAt: string }>>(`/onboarding/${id}/resend-otp`, undefined, { skipAuth: true });
 }
 
-export function onboardingVerify(id: string, input: { mobileOtp: string; emailOtp: string }) {
-  return api.post<{ orgId: string; orgSlug: string }>(
+export async function onboardingVerify(id: string, input: { mobileOtp: string; emailOtp: string }) {
+  const res = await api.post<Envelope<{ orgId: string; orgSlug: string }>>(
     `/onboarding/${id}/verify`,
     input,
     { skipAuth: true }
   );
+  return res.data;
 }
