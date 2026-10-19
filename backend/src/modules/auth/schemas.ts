@@ -11,14 +11,6 @@ export const resolveOrgSchema = z
     message: 'Provide either slugOrDomain or mobile'
   });
 
-export const loginSchema = z
-  .object({
-    orgId: z.number().int().positive().optional(),
-    mobile: mobileSchema,
-    password: z.string().min(1)
-  })
-  .strict();
-
 export const refreshSchema = z.object({ refreshToken: z.string().min(10) }).strict();
 
 export const logoutSchema = z.object({ everywhere: z.boolean().optional() }).strict();

@@ -10,7 +10,6 @@ interface AuthContextValue {
   user: User | null;
   accessToken: string | null;
   isInitializing: boolean;
-  login: (input: { orgId?: string; mobile: string; password: string }) => Promise<User>;
   loginWithOtp: (input: { mobile: string; otp: string }) => Promise<User>;
   loginWithToken: (accessToken: string) => Promise<User>;
   logout: () => Promise<void>;
@@ -87,15 +86,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     })();
   }, []);
 
-  const login = useCallback(
-    async (input: { orgId?: string; mobile: string; password: string }) => {
-      const session = await authApi.login(input);
-      applySession(session);
-      return session.user;
-    },
-    [applySession]
-  );
-
   const loginWithOtp = useCallback(
     async (input: { mobile: string; otp: string }) => {
       const session = await authApi.verifyLoginOtp(input);
@@ -130,13 +120,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       user,
       accessToken,
       isInitializing,
-      login,
       loginWithOtp,
       loginWithToken,
       logout,
       isPlatformAdmin: user?.role === 'platformadmin',
     }),
-    [user, accessToken, isInitializing, login, loginWithOtp, loginWithToken, logout]
+    [user, accessToken, isInitializing, loginWithOtp, loginWithToken, logout]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

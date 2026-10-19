@@ -64,20 +64,28 @@ provider before any non-local deployment.
 
 ## Demo accounts (from the schema's seed data, org_id=1, slug `avira-dream-homes`)
 
-| Role | Mobile | Password |
-|---|---|---|
-| accountadmin | 9999999999 | Admin@123 |
-| owner | 8888888888 | Owner@123 |
-| manager | 7777777771 | Mgr@1234 |
-| manager | 7777777772 | Mgr@5678 |
-| member | 6666666661 | Team@123 |
+Login is mobile + OTP for every role (see Auth model below) - there is no password at login.
+The mobile numbers below are still registered users; sign in with mobile + the mock OTP.
+
+| Role | Mobile |
+|---|---|
+| accountadmin | 9999999999 |
+| owner | 8888888888 |
+| manager | 7777777771 |
+| manager | 7777777772 |
+| member | 6666666661 |
 
 Platform admin (DB-backed, org `RedZone Labs Pvt. Ltd.`, seeded via `backend/sql/seed_platform_admin.sql`):
-Maneesh Sharma, mobile `9811295123`. Logs in with mobile + OTP (`POST /auth/otp/send` then
-`POST /auth/otp/verify`) instead of a password - the OTP is printed to the server console in dev mode.
+Maneesh Sharma, mobile `9811295123`.
 
 ## Auth model
 
+- **Login**: mobile + OTP for every role, matching the static prototype
+  (`account_admin_lms_desktop_v_1.4.1.html`) exactly - `POST /auth/otp/send { mobile }` then
+  `POST /auth/otp/verify { mobile, otp }`. There is no password at login any more. The OTP is a
+  fixed demo/mock code (`123456`, shown in the UI exactly like the prototype's "Demo verification
+  code" box), not a randomly generated/delivered one - `/otp/send` only checks the mobile is a
+  registered active user so the UI can show a friendly error before moving to the OTP screen.
 - **Access token**: JWT, HS256 (chosen over RS256 for local-dev simplicity - a single shared
   secret is fine since there's one server instance; swap to RS256 + JWKS if you need multiple
   verifying services), 15 min TTL, claims `{sub, org_id, role, view_scope, user_type, jti}`.
@@ -87,19 +95,16 @@ Maneesh Sharma, mobile `9811295123`. Logs in with mobile + OTP (`POST /auth/otp/
   adding a new column). `jti` in the access token is also this hash, so logout/session-revocation
   lines up with the session row. Refresh rotates the session by updating `session_id` to a new
   hash and extending `expires_at`.
-- **Step-up tokens**: issued by `POST /auth/step-up` after re-verifying the caller's password;
-  short-lived (5 min) JWTs consumed exactly once (tracked by `jti` in an in-memory `Set`), sent
-  back via the `X-Step-Up-Token` header to unlock `/units/{id}/reallocate` and editing a lead
-  currently in `Won` status.
+- **Step-up tokens**: a separate re-authentication step (unrelated to login) still used to unlock
+  `/units/{id}/reallocate` and editing a lead currently in `Won` status - `POST /auth/step-up`
+  checks the caller's `users.password_hash` (the seed passwords in the table above, e.g.
+  `Admin@123`) and issues a single-use, 5-minute JWT sent back via the `X-Step-Up-Token` header.
 - **Platform admin**: a real `users` row (role `platformadmin`) under its own home organization
-  (`RedZone Labs Pvt. Ltd.`, seeded by `backend/sql/seed_platform_admin.sql`). Login is
-  `POST /auth/otp/send { mobile }` then `POST /auth/otp/verify { mobile, otp }` - no password.
-  The OTP is a random 6-digit code, bcrypt-hashed and held in an in-process `Map` keyed by mobile
-  (5 min TTL, 5 attempts max), printed to the server console in dev mode instead of being sent via
-  SMS. On success it gets a normal JWT + `user_sessions` row like any other login.
-  `requireTenant` explicitly rejects `role: 'platformadmin'` even though it now has a real `org_id`,
-  so it still can't act as a tenant member of its home org - it must use impersonation like any
-  other tenant.
+  (`RedZone Labs Pvt. Ltd.`, seeded by `backend/sql/seed_platform_admin.sql`), logging in the same
+  mobile+OTP way as every other role. On success it gets a normal JWT + `user_sessions` row like
+  any other login. `requireTenant` explicitly rejects `role: 'platformadmin'` even though it has a
+  real `org_id`, so it still can't act as a tenant member of its home org - it must use
+  impersonation like any other tenant.
 - **Impersonation**: `POST /platform/tenants/{orgId}/impersonate` issues a single-use, 5-minute
   JWT scoped to that org's accountadmin user. The frontend exchanges it via
   `POST /auth/exchange-impersonation` for a normal access/refresh token pair (a real

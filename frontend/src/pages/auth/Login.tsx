@@ -5,24 +5,27 @@ import * as authApi from '../../api/auth';
 import { ApiError } from '../../api/client';
 import { validateMobile } from '../../utils/validators';
 
-const PLATFORM_ADMIN_MOBILE = '9811295123';
+// Matches the static prototype's demo OTP exactly - it is a fixed mock code shown on screen,
+// not a randomly generated/delivered one.
+const DEMO_OTP = '123456';
 
 export default function Login() {
-  const { login, loginWithOtp } = useAuth();
+  const { loginWithOtp } = useAuth();
   const navigate = useNavigate();
   const location = useLocation() as { state?: { from?: { pathname: string } } };
 
-  const [step, setStep] = useState<'org' | 'password' | 'otp'>('org');
-  const [orgSlugOrMobile, setOrgSlugOrMobile] = useState('');
-  const [orgId, setOrgId] = useState<string | undefined>(undefined);
-  const [orgName, setOrgName] = useState<string | null>(null);
+  const [step, setStep] = useState<'mobile' | 'otp'>('mobile');
   const [mobile, setMobile] = useState('');
-  const [password, setPassword] = useState('');
   const [otp, setOtp] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  async function handleResolveOrg(e: React.FormEvent) {
+  function handleMobileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    // Restrict to digits only, max 10 - matches the prototype's maxlength="10" numeric input.
+    setMobile(e.target.value.replace(/\D/g, '').slice(0, 10));
+  }
+
+  async function handleSendOtp(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     const mobileError = validateMobile(mobile);
@@ -32,38 +35,11 @@ export default function Login() {
     }
     setBusy(true);
     try {
-      if (mobile.trim() === PLATFORM_ADMIN_MOBILE) {
-        await authApi.sendLoginOtp({ mobile: mobile.trim() });
-        setStep('otp');
-        return;
-      }
-      const result = await authApi.resolveOrg({ mobile: mobile.trim() });
-      setOrgId(result.orgId);
-      setOrgName(result.orgName);
-      setStep('password');
+      await authApi.sendLoginOtp({ mobile: mobile.trim() });
+      setStep('otp');
     } catch (err) {
       if (err instanceof ApiError) setError(err.message);
-      else setError('Could not resolve your organization. Check your mobile number.');
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleLogin(e: React.FormEvent) {
-    e.preventDefault();
-    setError(null);
-    setBusy(true);
-    try {
-      const user = await login({ orgId, mobile: mobile.trim(), password });
-      const target = user.role === 'platformadmin' ? '/platform' : (location.state?.from?.pathname || '/dashboard');
-      navigate(target, { replace: true });
-    } catch (err) {
-      if (err instanceof ApiError) {
-        if (err.code === 'TOO_MANY_ATTEMPTS') setError('Too many failed attempts. Please try again later.');
-        else setError(err.message || 'Login failed.');
-      } else {
-        setError('Login failed. Please try again.');
-      }
+      else setError('Could not send a verification code. Please try again.');
     } finally {
       setBusy(false);
     }
@@ -74,18 +50,25 @@ export default function Login() {
     setError(null);
     setBusy(true);
     try {
-      await loginWithOtp({ mobile: mobile.trim(), otp: otp.trim() });
-      navigate('/platform', { replace: true });
+      const user = await loginWithOtp({ mobile: mobile.trim(), otp: otp.trim() });
+      const target = user.role === 'platformadmin' ? '/platform' : (location.state?.from?.pathname || '/dashboard');
+      navigate(target, { replace: true });
     } catch (err) {
       if (err instanceof ApiError) {
-        if (err.code === 'TOO_MANY_ATTEMPTS') setError('Too many incorrect attempts. Request a new code.');
-        else setError(err.message || 'Incorrect code.');
+        if (err.code === 'TOO_MANY_ATTEMPTS') setError('Too many incorrect attempts. Please try again later.');
+        else setError(err.message || 'Incorrect code. Use the demo code shown above.');
       } else {
         setError('Verification failed. Please try again.');
       }
     } finally {
       setBusy(false);
     }
+  }
+
+  function handleChangeMobile() {
+    setStep('mobile');
+    setOtp('');
+    setError(null);
   }
 
   async function handleResendOtp() {
@@ -115,58 +98,32 @@ export default function Login() {
         <div className="eyebrow">Secure access</div>
         <h2>Sign in to your organization</h2>
         <p className="auth-lead">
-          {step === 'org'
-            ? 'Enter your registered mobile number to continue.'
-            : step === 'otp'
-            ? `Platform Admin access detected. Enter the one-time code sent to +91 ${mobile.trim()}.`
-            : `Signing in to ${orgName ?? 'your organization'}. Enter your password.`}
+          {step === 'mobile'
+            ? "Enter your registered mobile number. We'll send a one-time verification code."
+            : `Enter the one-time code sent to +91 ${mobile}.`}
         </p>
 
-        {step === 'org' && (
-          <form onSubmit={handleResolveOrg}>
+        {step === 'mobile' && (
+          <form onSubmit={handleSendOtp}>
             <div className="field">
               <label htmlFor="mobile">Registered mobile number</label>
               <input
                 id="mobile"
                 className="input"
                 type="tel"
+                inputMode="numeric"
+                maxLength={10}
                 value={mobile}
-                onChange={(e) => setMobile(e.target.value)}
-                placeholder="98xxxxxxx"
+                onChange={handleMobileChange}
+                placeholder="10-digit registered mobile"
                 required
                 autoFocus
               />
             </div>
             {error && <div className="alert alert-error">{error}</div>}
             <div className="form-actions">
-              <button type="submit" className="btn btn-primary" disabled={busy}>
-                {busy ? 'Checking…' : 'Continue'}
-              </button>
-            </div>
-          </form>
-        )}
-
-        {step === 'password' && (
-          <form onSubmit={handleLogin}>
-            <div className="field">
-              <label htmlFor="password">Password</label>
-              <input
-                id="password"
-                className="input"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                autoFocus
-              />
-            </div>
-            {error && <div className="alert alert-error">{error}</div>}
-            <div className="form-actions">
-              <button type="button" className="btn" onClick={() => { setStep('org'); setError(null); }} disabled={busy}>
-                Back
-              </button>
-              <button type="submit" className="btn btn-primary" disabled={busy || !password}>
-                {busy ? 'Signing in…' : 'Sign in'}
+              <button type="submit" className="btn btn-primary" disabled={busy || mobile.length !== 10}>
+                {busy ? 'Sending…' : 'Send one-time code'}
               </button>
             </div>
           </form>
@@ -183,21 +140,24 @@ export default function Login() {
                 inputMode="numeric"
                 maxLength={6}
                 value={otp}
-                onChange={(e) => setOtp(e.target.value)}
+                onChange={(e) => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
                 placeholder="6-digit code"
                 required
                 autoFocus
               />
             </div>
+            <div className="alert alert-info">
+              Demo verification code: <strong>{DEMO_OTP}</strong>
+            </div>
             {error && <div className="alert alert-error">{error}</div>}
             <div className="form-actions">
-              <button type="button" className="btn" onClick={() => { setStep('org'); setOtp(''); setError(null); }} disabled={busy}>
-                Back
+              <button type="button" className="btn" onClick={handleChangeMobile} disabled={busy}>
+                Change mobile number
               </button>
               <button type="button" className="btn" onClick={handleResendOtp} disabled={busy}>
                 Resend code
               </button>
-              <button type="submit" className="btn btn-primary" disabled={busy || otp.trim().length !== 6}>
+              <button type="submit" className="btn btn-primary" disabled={busy || otp.length !== 6}>
                 {busy ? 'Verifying…' : 'Verify and continue'}
               </button>
             </div>
