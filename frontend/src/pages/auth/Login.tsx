@@ -8,20 +8,19 @@ import { validateMobile } from '../../utils/validators';
 const PLATFORM_ADMIN_MOBILE = '9811295123';
 
 export default function Login() {
-  const { login } = useAuth();
+  const { login, loginWithOtp } = useAuth();
   const navigate = useNavigate();
   const location = useLocation() as { state?: { from?: { pathname: string } } };
 
-  const [step, setStep] = useState<'org' | 'password'>('org');
+  const [step, setStep] = useState<'org' | 'password' | 'otp'>('org');
   const [orgSlugOrMobile, setOrgSlugOrMobile] = useState('');
   const [orgId, setOrgId] = useState<string | undefined>(undefined);
   const [orgName, setOrgName] = useState<string | null>(null);
   const [mobile, setMobile] = useState('');
   const [password, setPassword] = useState('');
+  const [otp, setOtp] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-
-  const isPlatformAdminLogin = mobile.trim() === PLATFORM_ADMIN_MOBILE;
 
   async function handleResolveOrg(e: React.FormEvent) {
     e.preventDefault();
@@ -34,8 +33,8 @@ export default function Login() {
     setBusy(true);
     try {
       if (mobile.trim() === PLATFORM_ADMIN_MOBILE) {
-        setStep('password');
-        setBusy(false);
+        await authApi.sendLoginOtp({ mobile: mobile.trim() });
+        setStep('otp');
         return;
       }
       const result = await authApi.resolveOrg({ mobile: mobile.trim() });
@@ -70,6 +69,38 @@ export default function Login() {
     }
   }
 
+  async function handleVerifyOtp(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setBusy(true);
+    try {
+      await loginWithOtp({ mobile: mobile.trim(), otp: otp.trim() });
+      navigate('/platform', { replace: true });
+    } catch (err) {
+      if (err instanceof ApiError) {
+        if (err.code === 'TOO_MANY_ATTEMPTS') setError('Too many incorrect attempts. Request a new code.');
+        else setError(err.message || 'Incorrect code.');
+      } else {
+        setError('Verification failed. Please try again.');
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleResendOtp() {
+    setError(null);
+    setBusy(true);
+    try {
+      await authApi.sendLoginOtp({ mobile: mobile.trim() });
+    } catch (err) {
+      if (err instanceof ApiError) setError(err.message);
+      else setError('Could not send a new code. Please try again.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <main className="auth-main">
       <div className="auth-card">
@@ -86,8 +117,8 @@ export default function Login() {
         <p className="auth-lead">
           {step === 'org'
             ? 'Enter your registered mobile number to continue.'
-            : isPlatformAdminLogin
-            ? 'Platform Admin access detected. Enter your password.'
+            : step === 'otp'
+            ? `Platform Admin access detected. Enter the one-time code sent to +91 ${mobile.trim()}.`
             : `Signing in to ${orgName ?? 'your organization'}. Enter your password.`}
         </p>
 
@@ -136,6 +167,38 @@ export default function Login() {
               </button>
               <button type="submit" className="btn btn-primary" disabled={busy || !password}>
                 {busy ? 'Signing in…' : 'Sign in'}
+              </button>
+            </div>
+          </form>
+        )}
+
+        {step === 'otp' && (
+          <form onSubmit={handleVerifyOtp}>
+            <div className="field">
+              <label htmlFor="otp">Verification code</label>
+              <input
+                id="otp"
+                className="input"
+                type="text"
+                inputMode="numeric"
+                maxLength={6}
+                value={otp}
+                onChange={(e) => setOtp(e.target.value)}
+                placeholder="6-digit code"
+                required
+                autoFocus
+              />
+            </div>
+            {error && <div className="alert alert-error">{error}</div>}
+            <div className="form-actions">
+              <button type="button" className="btn" onClick={() => { setStep('org'); setOtp(''); setError(null); }} disabled={busy}>
+                Back
+              </button>
+              <button type="button" className="btn" onClick={handleResendOtp} disabled={busy}>
+                Resend code
+              </button>
+              <button type="submit" className="btn btn-primary" disabled={busy || otp.trim().length !== 6}>
+                {busy ? 'Verifying…' : 'Verify and continue'}
               </button>
             </div>
           </form>

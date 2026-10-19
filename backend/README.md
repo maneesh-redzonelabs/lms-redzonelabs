@@ -72,8 +72,9 @@ provider before any non-local deployment.
 | manager | 7777777772 | Mgr@5678 |
 | member | 6666666661 | Team@123 |
 
-Platform admin (dev-mode, cross-tenant, not tied to any org row): mobile `9811295123`,
-password from `LMS_PLATFORM_ADMIN_PASSWORD` (default `RedZone@123!`).
+Platform admin (DB-backed, org `RedZone Labs Pvt. Ltd.`, seeded via `backend/sql/seed_platform_admin.sql`):
+Maneesh Sharma, mobile `9811295123`. Logs in with mobile + OTP (`POST /auth/otp/send` then
+`POST /auth/otp/verify`) instead of a password - the OTP is printed to the server console in dev mode.
 
 ## Auth model
 
@@ -90,10 +91,15 @@ password from `LMS_PLATFORM_ADMIN_PASSWORD` (default `RedZone@123!`).
   short-lived (5 min) JWTs consumed exactly once (tracked by `jti` in an in-memory `Set`), sent
   back via the `X-Step-Up-Token` header to unlock `/units/{id}/reallocate` and editing a lead
   currently in `Won` status.
-- **Platform admin**: a dev-mode special case in `/auth/login` - mobile `9811295123` plus
-  `LMS_PLATFORM_ADMIN_PASSWORD` issues a JWT with `role: 'platformadmin'` and `org_id: null`.
-  Since it isn't backed by a `users`/`organizations` row, its refresh-token session lives in an
-  in-process `Map` instead of `user_sessions` (resets on restart - acceptable for local dev).
+- **Platform admin**: a real `users` row (role `platformadmin`) under its own home organization
+  (`RedZone Labs Pvt. Ltd.`, seeded by `backend/sql/seed_platform_admin.sql`). Login is
+  `POST /auth/otp/send { mobile }` then `POST /auth/otp/verify { mobile, otp }` - no password.
+  The OTP is a random 6-digit code, bcrypt-hashed and held in an in-process `Map` keyed by mobile
+  (5 min TTL, 5 attempts max), printed to the server console in dev mode instead of being sent via
+  SMS. On success it gets a normal JWT + `user_sessions` row like any other login.
+  `requireTenant` explicitly rejects `role: 'platformadmin'` even though it now has a real `org_id`,
+  so it still can't act as a tenant member of its home org - it must use impersonation like any
+  other tenant.
 - **Impersonation**: `POST /platform/tenants/{orgId}/impersonate` issues a single-use, 5-minute
   JWT scoped to that org's accountadmin user. The frontend exchanges it via
   `POST /auth/exchange-impersonation` for a normal access/refresh token pair (a real

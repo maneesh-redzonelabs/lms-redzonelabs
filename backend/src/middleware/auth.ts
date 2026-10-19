@@ -74,7 +74,10 @@ export function requireRole(...roles: string[]) {
 }
 
 export function requireTenant(req: FastifyRequest): { orgId: number; userId: number; role: string; viewScope: string | null } {
-  if (!req.authUser || req.authUser.orgId === null) {
+  // Platform Admin now has a real org_id (its own "RedZone Labs" home organization) so it can be
+  // issued a normal session/JWT, but it must never be treated as a tenant member of that org -
+  // tenant-scoped routes stay off-limits unless accessed via impersonation (see /platform/tenants).
+  if (!req.authUser || req.authUser.orgId === null || req.authUser.isPlatformAdmin) {
     throw Errors.forbiddenRole('This action requires a tenant-scoped account');
   }
   return {

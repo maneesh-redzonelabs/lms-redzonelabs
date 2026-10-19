@@ -5,7 +5,7 @@ import { withTransaction } from '../../db/pool';
 import { parseOrThrow } from '../../utils/validate';
 import { Errors } from '../../utils/errors';
 import { allow, RateLimits } from '../../middleware/rateLimit';
-import { randomToken, sha256Hex } from '../../utils/tokens';
+import { randomOtp6, randomToken, sha256Hex } from '../../utils/tokens';
 import {
   authenticate,
   issueStepUpToken,
@@ -15,11 +15,22 @@ import {
 } from '../../middleware/auth';
 import { writeAuditLog } from '../../services/audit';
 import { env } from '../../config/env';
-import { loginSchema, logoutSchema, refreshSchema, resolveOrgSchema, stepUpSchema } from './schemas';
+import {
+  loginSchema,
+  logoutSchema,
+  refreshSchema,
+  resolveOrgSchema,
+  sendLoginOtpSchema,
+  stepUpSchema,
+  verifyLoginOtpSchema
+} from './schemas';
 
-// In-memory refresh-token store for the dev-mode platform-admin pseudo-account, which is not
-// backed by a row in `users`/`organizations` and therefore cannot use `user_sessions`.
-const platformAdminSessions = new Map<string, { expiresAt: number }>();
+// In-memory OTP store for platformadmin login (mobile -> pending OTP). Dev-mode delivery only:
+// the code is printed to the backend console instead of being sent via SMS, same convention as
+// the onboarding module's mobile/email verification OTPs.
+const OTP_TTL_MIN = 5;
+const OTP_BCRYPT_COST = 10;
+const loginOtps = new Map<string, { hash: string; expiresAt: number; attempts: number; userId: number; orgId: number }>();
 
 // frontend/src/api/types.ts User (consumed via AuthSession.user and GET /auth/me) expects
 // { id, name, mobile, email, role, status, reportsTo, orgId, createdAt } — not the raw
@@ -89,36 +100,121 @@ export default async function authRoutes(app: FastifyInstance) {
     };
   });
 
+  // Platform Admin login uses mobile + OTP instead of a password. Any active user whose role is
+  // 'platformadmin' can request a code here; there is no hardcoded mobile number any more.
+  app.post('/otp/send', async (req) => {
+    const ip = req.ip;
+    if (!allow(`otp-send:${ip}`, RateLimits.LOGIN_PER_IP.windowMs, RateLimits.LOGIN_PER_IP.max)) {
+      throw Errors.rateLimited('Too many OTP requests from this IP, please wait a minute');
+    }
+    const body = parseOrThrow(sendLoginOtpSchema, req.body);
+
+    const user = await withTransaction(async (client) => {
+      const res = await client.query(
+        `SELECT u.user_id, u.org_id, u.full_name
+         FROM users u JOIN ref_roles r ON r.role_id = u.role_id
+         WHERE r.role_name = 'platformadmin' AND u.mobile = $1 AND u.is_active = TRUE
+         LIMIT 1`,
+        [body.mobile]
+      );
+      return res.rows[0] ?? null;
+    });
+    if (!user) throw Errors.notFound('This mobile number is not registered for platform access.');
+
+    const otp = randomOtp6();
+    const hash = await bcrypt.hash(otp, OTP_BCRYPT_COST);
+    loginOtps.set(body.mobile, {
+      hash,
+      expiresAt: Date.now() + OTP_TTL_MIN * 60000,
+      attempts: 0,
+      userId: user.user_id,
+      orgId: user.org_id
+    });
+
+    // Dev-mode OTP delivery: no real SMS gateway is wired up for local development.
+    // eslint-disable-next-line no-console
+    console.log(
+      `\n[DEV OTP] === Platform Admin login: ${user.full_name} (${body.mobile}) ===\n` +
+        `[DEV OTP] OTP: ${otp}\n[DEV OTP] Expires in ${OTP_TTL_MIN} minutes\n`
+    );
+
+    return { data: { expiresIn: OTP_TTL_MIN * 60 } };
+  });
+
+  app.post('/otp/verify', async (req) => {
+    const ip = req.ip;
+    const body = parseOrThrow(verifyLoginOtpSchema, req.body);
+
+    const entry = loginOtps.get(body.mobile);
+    if (!entry) throw Errors.validation({ otp: 'Request a new OTP before verifying.' });
+    if (entry.expiresAt < Date.now()) {
+      loginOtps.delete(body.mobile);
+      throw Errors.validation({ otp: 'OTP has expired, please request a new one.' });
+    }
+    if (entry.attempts >= 5) {
+      loginOtps.delete(body.mobile);
+      throw Errors.tooManyAttempts('Too many incorrect attempts. Request a new OTP.');
+    }
+
+    const ok = await bcrypt.compare(body.otp, entry.hash);
+    if (!ok) {
+      entry.attempts += 1;
+      throw Errors.validation({ otp: 'Incorrect code. Please try again.' });
+    }
+    loginOtps.delete(body.mobile);
+
+    const result = await withTransaction(async (client) => {
+      const userRes = await client.query(
+        `SELECT u.user_id, u.org_id, u.full_name, u.mobile, u.email, u.user_type, u.company_name, u.manager_id,
+                u.is_active, u.created_at, r.role_name, r.view_scope
+         FROM users u JOIN ref_roles r ON r.role_id = u.role_id
+         WHERE u.user_id = $1 AND u.org_id = $2`,
+        [entry.userId, entry.orgId]
+      );
+      if (userRes.rows.length === 0 || !userRes.rows[0].is_active) throw Errors.invalidCredentials();
+      const u = userRes.rows[0];
+
+      const refreshToken = randomToken();
+      const sessionId = sha256Hex(refreshToken);
+      const expiresAt = new Date(Date.now() + env.refreshTokenTtlDays * 86400000);
+      await client.query(
+        `INSERT INTO user_sessions (session_id, org_id, user_id, device_type, ip_address, user_agent, expires_at, last_active_at, is_active)
+         VALUES ($1,$2,$3,'desktop',$4,$5,$6,CURRENT_TIMESTAMP,TRUE)`,
+        [sessionId, u.org_id, u.user_id, ip, req.headers['user-agent'] ?? null, expiresAt]
+      );
+
+      const accessToken = signAccessToken({
+        sub: u.user_id,
+        org_id: u.org_id,
+        role: u.role_name,
+        view_scope: u.view_scope,
+        user_type: u.user_type,
+        jti: sessionId
+      });
+
+      await writeAuditLog(client, {
+        orgId: u.org_id,
+        userId: u.user_id,
+        action: 'LOGIN',
+        tableName: 'users',
+        recordId: u.user_id,
+        newValues: { via: 'otp' },
+        ipAddress: ip,
+        sessionId
+      });
+
+      return { accessToken, refreshToken, user: userProfile(u) };
+    });
+
+    return { data: { ...result, expiresIn: env.accessTokenTtlMin * 60 } };
+  });
+
   app.post('/login', async (req) => {
     const ip = req.ip;
     if (!allow(`login:${ip}`, RateLimits.LOGIN_PER_IP.windowMs, RateLimits.LOGIN_PER_IP.max)) {
       throw Errors.rateLimited('Too many login attempts from this IP, please wait a minute');
     }
     const body = parseOrThrow(loginSchema, req.body);
-
-    // Dev-mode platform-admin login, cross-tenant, not tied to any org/user row.
-    if (body.mobile === env.platformAdminMobile) {
-      if (body.password !== env.platformAdminPassword) throw Errors.invalidCredentials();
-      const refreshToken = randomToken();
-      const hash = sha256Hex(refreshToken);
-      platformAdminSessions.set(hash, { expiresAt: Date.now() + env.refreshTokenTtlDays * 86400000 });
-      const accessToken = signAccessToken({
-        sub: 0,
-        org_id: null,
-        role: 'platformadmin',
-        view_scope: null,
-        user_type: null,
-        jti: hash
-      });
-      return {
-        data: {
-          accessToken,
-          refreshToken,
-          expiresIn: env.accessTokenTtlMin * 60,
-          user: { id: 0, orgId: null, name: 'Platform Admin', role: 'platformadmin', status: 'active' }
-        }
-      };
-    }
 
     if (!body.orgId) throw Errors.validation({ orgId: 'orgId is required' });
     const orgId: number = body.orgId;
@@ -213,27 +309,6 @@ export default async function authRoutes(app: FastifyInstance) {
     const body = parseOrThrow(refreshSchema, req.body);
     const hash = sha256Hex(body.refreshToken);
 
-    if (platformAdminSessions.has(hash)) {
-      const session = platformAdminSessions.get(hash)!;
-      if (session.expiresAt < Date.now()) {
-        platformAdminSessions.delete(hash);
-        throw Errors.tokenExpired();
-      }
-      platformAdminSessions.delete(hash);
-      const newRefresh = randomToken();
-      const newHash = sha256Hex(newRefresh);
-      platformAdminSessions.set(newHash, { expiresAt: Date.now() + env.refreshTokenTtlDays * 86400000 });
-      const accessToken = signAccessToken({
-        sub: 0,
-        org_id: null,
-        role: 'platformadmin',
-        view_scope: null,
-        user_type: null,
-        jti: newHash
-      });
-      return { data: { accessToken, refreshToken: newRefresh, expiresIn: env.accessTokenTtlMin * 60 } };
-    }
-
     const result = await withTransaction(async (client) => {
       const sessRes = await client.query(
         `SELECT s.session_id, s.org_id, s.user_id, u.full_name, r.role_name, r.view_scope, u.user_type
@@ -271,11 +346,6 @@ export default async function authRoutes(app: FastifyInstance) {
   app.post('/logout', { preHandler: authenticate }, async (req) => {
     const body = parseOrThrow(logoutSchema, req.body ?? {});
     const user = req.authUser!;
-
-    if (user.isPlatformAdmin) {
-      platformAdminSessions.delete(user.sessionId);
-      return { data: { loggedOut: true } };
-    }
 
     await withTransaction(async (client) => {
       if (body.everywhere) {
@@ -370,19 +440,6 @@ export default async function authRoutes(app: FastifyInstance) {
 
   app.get('/me', { preHandler: authenticate }, async (req) => {
     const user = req.authUser!;
-    if (user.isPlatformAdmin) {
-      return {
-        data: {
-          id: 0,
-          orgId: null,
-          name: 'Platform Admin',
-          role: 'platformadmin',
-          status: 'active',
-          viewScope: null,
-          permissions: { canCreateUsers: true, canCreateProjects: true, isPlatformAdmin: true }
-        }
-      };
-    }
     const data = await withTransaction(async (client) => {
       const res = await client.query(
         `SELECT u.user_id, u.org_id, u.full_name, u.mobile, u.email, u.user_type, u.company_name, u.manager_id,
@@ -400,7 +457,7 @@ export default async function authRoutes(app: FastifyInstance) {
           canCreateProjects: u.can_create_projects,
           canManageAllocations: ['accountadmin', 'owner'].includes(u.role_name),
           canDeleteLeads: ['accountadmin', 'owner'].includes(u.role_name),
-          isPlatformAdmin: false
+          isPlatformAdmin: u.role_name === 'platformadmin'
         }
       };
     });

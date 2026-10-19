@@ -11,6 +11,7 @@ interface AuthContextValue {
   accessToken: string | null;
   isInitializing: boolean;
   login: (input: { orgId?: string; mobile: string; password: string }) => Promise<User>;
+  loginWithOtp: (input: { mobile: string; otp: string }) => Promise<User>;
   loginWithToken: (accessToken: string) => Promise<User>;
   logout: () => Promise<void>;
   isPlatformAdmin: boolean;
@@ -95,6 +96,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     [applySession]
   );
 
+  const loginWithOtp = useCallback(
+    async (input: { mobile: string; otp: string }) => {
+      const session = await authApi.verifyLoginOtp(input);
+      applySession(session);
+      return session.user;
+    },
+    [applySession]
+  );
+
   const loginWithToken = useCallback(
     async (token: string) => {
       setAccessToken(token);
@@ -121,11 +131,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       accessToken,
       isInitializing,
       login,
+      loginWithOtp,
       loginWithToken,
       logout,
       isPlatformAdmin: user?.role === 'platformadmin',
     }),
-    [user, accessToken, isInitializing, login, loginWithToken, logout]
+    [user, accessToken, isInitializing, login, loginWithOtp, loginWithToken, logout]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -13,6 +13,15 @@ export function login(input: { orgId?: string; mobile: string; password: string 
   return api.post<AuthSession>('/auth/login', input, { skipAuth: true });
 }
 
+// Platform Admin login: mobile + OTP instead of a password.
+export function sendLoginOtp(input: { mobile: string }) {
+  return api.post<{ expiresIn: number }>('/auth/otp/send', input, { skipAuth: true });
+}
+
+export function verifyLoginOtp(input: { mobile: string; otp: string }) {
+  return api.post<AuthSession>('/auth/otp/verify', input, { skipAuth: true });
+}
+
 export function refresh(refreshToken: string) {
   return api.post<AuthSession>('/auth/refresh', { refreshToken }, { skipAuth: true });
 }
