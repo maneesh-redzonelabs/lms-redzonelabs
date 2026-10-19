@@ -15,7 +15,7 @@ export default function PlatformDashboard() {
       <div className="kpi-grid">
         <div className="kpi-card accent-gold">
           <div className="kpi-label">Total organizations</div>
-          <div className="kpi-value">{tenantsQuery.data?.meta.total ?? '-'}</div>
+          <div className="kpi-value">{tenantsQuery.data?.meta?.total ?? tenants.length}</div>
         </div>
         <div className="kpi-card accent-green">
           <div className="kpi-label">Active</div>
