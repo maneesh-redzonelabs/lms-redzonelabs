@@ -45,14 +45,35 @@ export default async function authRoutes(app: FastifyInstance) {
   app.post('/resolve-org', async (req) => {
     const body = parseOrThrow(resolveOrgSchema, req.body);
     const org = await withTransaction(async (client) => {
-      const result = await client.query(`SELECT * FROM fn_get_org_by_slug($1)`, [body.slugOrDomain]);
-      if (result.rows.length === 0) return null;
-      const extra = await client.query(`SELECT logo_url, org_slug FROM organizations WHERE org_id = $1`, [
-        result.rows[0].org_id
-      ]);
-      return { ...result.rows[0], ...extra.rows[0] };
+      if (body.slugOrDomain) {
+        const result = await client.query(`SELECT * FROM fn_get_org_by_slug($1)`, [body.slugOrDomain]);
+        if (result.rows.length === 0) return null;
+        const extra = await client.query(`SELECT logo_url, org_slug FROM organizations WHERE org_id = $1`, [
+          result.rows[0].org_id
+        ]);
+        return { ...result.rows[0], ...extra.rows[0] };
+      }
+
+      // Mobile-first login (matches the prototype's flow: the user enters only their
+      // registered mobile number, with no separate org/slug step). Resolve the tenant from
+      // the active user row matching that mobile, falling back to the organization's own
+      // primary contact mobile (covers a freshly-onboarded AccountAdmin edge case).
+      const byUser = await client.query(
+        `SELECT o.* FROM users u JOIN organizations o ON o.org_id = u.org_id
+         WHERE u.mobile = $1 AND u.is_active = TRUE ORDER BY u.created_at ASC LIMIT 1`,
+        [body.mobile]
+      );
+      if (byUser.rows.length > 0) return byUser.rows[0];
+
+      const byOrgContact = await client.query(
+        `SELECT * FROM organizations WHERE primary_contact_mobile = $1 AND is_active = TRUE ORDER BY created_at ASC LIMIT 1`,
+        [body.mobile]
+      );
+      if (byOrgContact.rows.length > 0) return byOrgContact.rows[0];
+
+      return null;
     });
-    if (!org) throw Errors.notFound('Organization not found');
+    if (!org) throw Errors.notFound('This mobile number is not registered for platform access.');
     return {
       data: {
         orgId: org.org_id,

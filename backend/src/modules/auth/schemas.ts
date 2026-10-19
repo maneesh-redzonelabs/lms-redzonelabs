@@ -1,7 +1,15 @@
 import { z } from 'zod';
 import { mobileSchema } from '../../utils/validators';
 
-export const resolveOrgSchema = z.object({ slugOrDomain: z.string().min(1).max(100) }).strict();
+export const resolveOrgSchema = z
+  .object({
+    slugOrDomain: z.string().min(1).max(100).optional(),
+    mobile: mobileSchema.optional()
+  })
+  .strict()
+  .refine((v) => !!v.slugOrDomain || !!v.mobile, {
+    message: 'Provide either slugOrDomain or mobile'
+  });
 
 export const loginSchema = z
   .object({
