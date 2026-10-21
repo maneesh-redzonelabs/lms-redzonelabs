@@ -23,6 +23,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [isInitializing, setIsInitializing] = useState(true);
   const accessTokenRef = useRef<string | null>(null);
+  const refreshPromiseRef = useRef<Promise<string | null> | null>(null);
 
   useEffect(() => {
     accessTokenRef.current = accessToken;
@@ -44,17 +45,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     localStorage.removeItem(STORAGE_KEY);
   }, []);
 
-  const doRefresh = useCallback(async (): Promise<string | null> => {
-    const refreshToken = localStorage.getItem(STORAGE_KEY);
-    if (!refreshToken) return null;
-    try {
-      const session = await authApi.refresh(refreshToken);
-      applySession(session);
-      return session.accessToken;
-    } catch {
-      clearSession();
-      return null;
-    }
+  const doRefresh = useCallback((): Promise<string | null> => {
+    // The refresh token is single-use and rotates on every call (see backend POST /auth/refresh),
+    // so two concurrent calls racing on the same stored token is fatal: the first rotates it and
+    // succeeds, the second then finds a stale token, fails, and wipes the session that the first
+    // call just restored. This happens in practice - React 18 StrictMode double-invokes the
+    // mount effect below in dev, and any two API calls that both 401 at once would otherwise both
+    // try to refresh. Dedupe by sharing one in-flight promise across all callers.
+    if (refreshPromiseRef.current) return refreshPromiseRef.current;
+
+    const promise = (async () => {
+      const refreshToken = localStorage.getItem(STORAGE_KEY);
+      if (!refreshToken) return null;
+      try {
+        const session = await authApi.refresh(refreshToken);
+        applySession(session);
+        return session.accessToken;
+      } catch {
+        clearSession();
+        return null;
+      } finally {
+        refreshPromiseRef.current = null;
+      }
+    })();
+
+    refreshPromiseRef.current = promise;
+    return promise;
   }, [applySession, clearSession]);
 
   useEffect(() => {
