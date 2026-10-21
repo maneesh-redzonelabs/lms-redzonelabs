@@ -132,6 +132,7 @@ export default function ReferenceMasters() {
               <tr>
                 <th>Code</th>
                 <th>Label</th>
+                <th>Display order</th>
                 <th></th>
               </tr>
             </thead>
@@ -140,6 +141,7 @@ export default function ReferenceMasters() {
                 <tr key={o.code}>
                   <td>{o.code}</td>
                   <td>{o.label}</td>
+                  <td>{o.sortOrder ?? '-'}</td>
                   <td>
                     <button className="btn btn-sm" onClick={() => setEditing(o)}>Edit</button>
                   </td>

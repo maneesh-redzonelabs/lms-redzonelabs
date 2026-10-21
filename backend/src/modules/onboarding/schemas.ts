@@ -14,13 +14,15 @@ export const startSchema = z
   })
   .strict();
 
-export const resendOtpSchema = z.object({ channel: z.enum(['mobile', 'email']) }).strict();
+// No fields needed - resend always re-sends the email verification code for this signup.
+export const resendOtpSchema = z.object({}).strict().optional();
 
+// Organization creation is confirmed by the email OTP alone (demo/mock code - see
+// backend/src/services/otp.ts). There is no password at signup any more; sign-in is mobile + OTP
+// for every role.
 export const verifySchema = z
   .object({
-    mobileOtp: z.string().regex(/^\d{6}$/),
-    emailOtp: z.string().regex(/^\d{6}$/),
-    password: z.string().min(8).max(100)
+    emailOtp: z.string().regex(/^\d{6}$/)
   })
   .strict();
 

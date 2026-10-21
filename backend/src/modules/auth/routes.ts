@@ -15,6 +15,7 @@ import {
 } from '../../middleware/auth';
 import { writeAuditLog } from '../../services/audit';
 import { env } from '../../config/env';
+import { sendOtp, verifyOtp } from '../../services/otp';
 import {
   logoutSchema,
   refreshSchema,
@@ -23,11 +24,6 @@ import {
   stepUpSchema,
   verifyLoginOtpSchema
 } from './schemas';
-
-// Login is mobile + OTP for every role (no password). This is a demo/mock OTP, matching the
-// static prototype (account_admin_lms_desktop_v_1.4.1.html): the code is always this fixed
-// 6-digit value, shown directly in the UI, rather than a randomly generated/delivered one.
-const MOCK_OTP = '123456';
 
 async function findLoginUserByMobile(client: any, mobile: string) {
   const res = await client.query(
@@ -123,6 +119,7 @@ export default async function authRoutes(app: FastifyInstance) {
     const body = parseOrThrow(sendLoginOtpSchema, req.body);
     const user = await withTransaction((client) => findLoginUserByMobile(client, body.mobile));
     if (!user) throw Errors.notFound('This mobile number is not registered for platform access.');
+    sendOtp('sms', body.mobile, 'login');
     return { data: { sent: true } };
   });
 
@@ -132,7 +129,7 @@ export default async function authRoutes(app: FastifyInstance) {
       throw Errors.rateLimited('Too many attempts from this IP, please wait a minute');
     }
     const body = parseOrThrow(verifyLoginOtpSchema, req.body);
-    if (body.otp !== MOCK_OTP) {
+    if (!verifyOtp(body.otp)) {
       throw Errors.validation({ otp: 'Incorrect code. Use the demo code shown above.' });
     }
 

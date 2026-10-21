@@ -1,10 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
-import { getRefList, REF_FALLBACKS, RefKey } from '../api/reference';
+import { getRefList, REF_FALLBACKS, RefKey, RefRow } from '../api/reference';
 
 export function useReferenceData(key: RefKey) {
   return useQuery({
     queryKey: ['ref', key],
-    queryFn: async () => {
+    queryFn: async (): Promise<RefRow[]> => {
       try {
         const list = await getRefList(key);
         if (Array.isArray(list) && list.length) return list;

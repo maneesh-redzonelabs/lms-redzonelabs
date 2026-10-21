@@ -1,12 +1,13 @@
 import { FastifyInstance } from 'fastify';
 import bcrypt from 'bcrypt';
+import crypto from 'crypto';
 import { withTransaction } from '../../db/pool';
 import { parseOrThrow } from '../../utils/validate';
 import { Errors } from '../../utils/errors';
 import { allow, RateLimits } from '../../middleware/rateLimit';
-import { randomOtp6 } from '../../utils/tokens';
 import { slugify } from '../../utils/slug';
 import { writeAuditLog } from '../../services/audit';
+import { MOCK_OTP, sendOtp, verifyOtp } from '../../services/otp';
 import { startSchema, resendOtpSchema, verifySchema, paymentStubSchema } from './schemas';
 
 const OTP_TTL_MIN = 15;
@@ -16,10 +17,10 @@ export default async function onboardingRoutes(app: FastifyInstance) {
   app.post('/start', async (req) => {
     const body = parseOrThrow(startSchema, req.body);
 
-    const mobileOtp = randomOtp6();
-    const emailOtp = randomOtp6();
-    const mobileHash = await bcrypt.hash(mobileOtp, BCRYPT_COST);
-    const emailHash = await bcrypt.hash(emailOtp, BCRYPT_COST);
+    // mobile_otp_hash/email_otp_hash are NOT NULL columns left over from when each OTP was
+    // random and hashed per request; now every OTP is the shared mock code (see services/otp.ts),
+    // verified by direct comparison, so these just hold a placeholder hash of that fixed code.
+    const otpHash = await bcrypt.hash(MOCK_OTP, BCRYPT_COST);
     const expiresAt = new Date(Date.now() + OTP_TTL_MIN * 60000);
 
     const verificationId = await withTransaction(async (client) => {
@@ -38,8 +39,8 @@ export default async function onboardingRoutes(app: FastifyInstance) {
           body.contactName,
           body.mobile,
           body.email,
-          mobileHash,
-          emailHash,
+          otpHash,
+          otpHash,
           expiresAt,
           req.ip
         ]
@@ -47,14 +48,7 @@ export default async function onboardingRoutes(app: FastifyInstance) {
       return res.rows[0].verification_id;
     });
 
-    // Dev-mode OTP delivery: no real SMS/email gateway is wired up for local development.
-    // eslint-disable-next-line no-console
-    console.log(
-      `\n[DEV OTP] === Onboarding verification #${verificationId} ===\n` +
-        `[DEV OTP] Mobile (${body.mobile}) OTP: ${mobileOtp}\n` +
-        `[DEV OTP] Email  (${body.email}) OTP: ${emailOtp}\n` +
-        `[DEV OTP] Expires at: ${expiresAt.toISOString()}\n`
-    );
+    sendOtp('email', body.email, `onboarding verification #${verificationId}`);
 
     return { data: { verificationId: String(verificationId), expiresAt } };
   });
@@ -64,7 +58,7 @@ export default async function onboardingRoutes(app: FastifyInstance) {
       throw Errors.rateLimited();
     }
     const { verificationId } = req.params as { verificationId: string };
-    const body = parseOrThrow(resendOtpSchema, req.body);
+    parseOrThrow(resendOtpSchema, req.body);
 
     const result = await withTransaction(async (client) => {
       const res = await client.query(`SELECT * FROM onboarding_verifications WHERE verification_id = $1`, [
@@ -75,19 +69,13 @@ export default async function onboardingRoutes(app: FastifyInstance) {
       if (row.verified_at) throw Errors.validation({ verification: 'already verified' });
       if (row.attempt_count >= 5) throw Errors.tooManyAttempts('Maximum OTP resend attempts reached');
 
-      const otp = randomOtp6();
-      const hash = await bcrypt.hash(otp, BCRYPT_COST);
-      const column = body.channel === 'mobile' ? 'mobile_otp_hash' : 'email_otp_hash';
       const expiresAt = new Date(Date.now() + OTP_TTL_MIN * 60000);
       await client.query(
-        `UPDATE onboarding_verifications SET ${column} = $1, attempt_count = attempt_count + 1, expires_at = $2 WHERE verification_id = $3`,
-        [hash, expiresAt, verificationId]
+        `UPDATE onboarding_verifications SET attempt_count = attempt_count + 1, expires_at = $1 WHERE verification_id = $2`,
+        [expiresAt, verificationId]
       );
 
-      console.log(
-        `\n[DEV OTP] === Resend for verification #${verificationId} (${body.channel}) ===\n` +
-          `[DEV OTP] OTP: ${otp}\n[DEV OTP] Expires at: ${expiresAt.toISOString()}\n`
-      );
+      sendOtp('email', row.email, `onboarding verification #${verificationId} (resend)`);
       return { expiresAt };
     });
 
@@ -110,10 +98,8 @@ export default async function onboardingRoutes(app: FastifyInstance) {
         throw Errors.validation({ otp: 'OTP has expired, please resend' });
       }
 
-      const mobileOk = await bcrypt.compare(body.mobileOtp, row.mobile_otp_hash);
-      const emailOk = await bcrypt.compare(body.emailOtp, row.email_otp_hash);
-      if (!mobileOk || !emailOk) {
-        throw Errors.validation({ otp: 'Invalid OTP' });
+      if (!verifyOtp(body.emailOtp)) {
+        throw Errors.validation({ otp: 'Incorrect code. Use the demo code shown above.' });
       }
 
       await client.query(
@@ -170,7 +156,10 @@ export default async function onboardingRoutes(app: FastifyInstance) {
       );
       const org = orgRes.rows[0];
 
-      const passwordHash = await bcrypt.hash(body.password, BCRYPT_COST);
+      // Sign-in is mobile + OTP only now, so there is no user-chosen password to hash here.
+      // password_hash is still NOT NULL on `users` (used only by the separate step-up
+      // re-authentication feature), so store a random, never-shared value as a placeholder.
+      const passwordHash = await bcrypt.hash(crypto.randomBytes(32).toString('hex'), BCRYPT_COST);
       const roleRes = await client.query(`SELECT role_id FROM ref_roles WHERE role_name = 'accountadmin'`);
       const userRes = await client.query(
         `INSERT INTO users (org_id, full_name, mobile, email, password_hash, role_id, manager_id, user_type, is_active, created_by)

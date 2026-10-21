@@ -27,10 +27,8 @@ export default function OrgSignup() {
     contactName: '',
     contactMobile: '',
     contactEmail: '',
-    password: '',
   });
 
-  const [mobileOtp, setMobileOtp] = useState('');
   const [emailOtp, setEmailOtp] = useState('');
 
   function update<K extends keyof typeof form>(key: K, value: string) {
@@ -48,10 +46,6 @@ export default function OrgSignup() {
     const emailError = validateEmail(form.contactEmail, true);
     if (emailError) {
       setError(emailError);
-      return;
-    }
-    if (form.password.length < 8) {
-      setError('Password must be at least 8 characters.');
       return;
     }
     setBusy(true);
@@ -85,7 +79,7 @@ export default function OrgSignup() {
     setError(null);
     setBusy(true);
     try {
-      const result = await authApi.onboardingVerify(onboardingId, { mobileOtp, emailOtp, password: form.password });
+      const result = await authApi.onboardingVerify(onboardingId, { emailOtp });
       setResultOrgSlug(result.orgSlug);
       setStep('done');
     } catch (err) {
@@ -153,22 +147,6 @@ export default function OrgSignup() {
                 <label htmlFor="contactEmail">Your email</label>
                 <input id="contactEmail" type="email" className="input" required value={form.contactEmail} onChange={(e) => update('contactEmail', e.target.value)} />
               </div>
-              <div className="field">
-                <label htmlFor="password">Account password</label>
-                <input
-                  id="password"
-                  type="password"
-                  className="input"
-                  minLength={8}
-                  required
-                  value={form.password}
-                  onChange={(e) => update('password', e.target.value)}
-                />
-                <small className="hint">
-                  At least 8 characters. Sign-in uses a mobile OTP - this password is only needed to confirm sensitive
-                  actions later, like reallocating a unit or editing a Won lead.
-                </small>
-              </div>
             </div>
             {error && <div className="alert alert-error">{error}</div>}
             <div className="form-actions">
@@ -182,16 +160,19 @@ export default function OrgSignup() {
         {step === 'otp' && (
           <form onSubmit={handleVerify}>
             <div className="auth-note">
-              Dev mode: verification codes are not sent by SMS/email in this build — check the
-              <b> backend server console</b> for your mobile and email OTPs.
+              Demo verification code: <b>123456</b>. We'll integrate real email delivery later.
             </div>
             <div className="field">
-              <label htmlFor="mobileOtp">Mobile OTP</label>
-              <input id="mobileOtp" className="input" required value={mobileOtp} onChange={(e) => setMobileOtp(e.target.value)} />
-            </div>
-            <div className="field">
-              <label htmlFor="emailOtp">Email OTP</label>
-              <input id="emailOtp" className="input" required value={emailOtp} onChange={(e) => setEmailOtp(e.target.value)} />
+              <label htmlFor="emailOtp">Email verification code</label>
+              <input
+                id="emailOtp"
+                className="input"
+                inputMode="numeric"
+                maxLength={6}
+                required
+                value={emailOtp}
+                onChange={(e) => setEmailOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
+              />
             </div>
             {error && <div className="alert alert-error">{error}</div>}
             <div className="form-actions">

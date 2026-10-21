@@ -85,7 +85,7 @@ export async function onboardingResendOtp(id: string) {
   await api.post<Envelope<{ expiresAt: string }>>(`/onboarding/${id}/resend-otp`, undefined, { skipAuth: true });
 }
 
-export async function onboardingVerify(id: string, input: { mobileOtp: string; emailOtp: string; password: string }) {
+export async function onboardingVerify(id: string, input: { emailOtp: string }) {
   const res = await api.post<Envelope<{ orgId: string; orgSlug: string }>>(
     `/onboarding/${id}/verify`,
     input,
