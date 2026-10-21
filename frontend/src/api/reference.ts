@@ -16,8 +16,42 @@ export const refEndpoints = {
 
 export type RefKey = keyof typeof refEndpoints;
 
-export function getRefList(key: RefKey) {
-  return api.get<RefOption[]>(refEndpoints[key]);
+// GET /ref/* responses are wrapped as { data: [...] } like every other backend route (see
+// api/auth.ts for the full explanation of why apiRequest() doesn't unwrap this generically).
+interface Envelope<T> {
+  data: T;
+}
+
+// A reference row carries its stable { code, label } plus whatever extra columns that master
+// has (ids, sort order, flags, etc. - already camelCased by the backend's response hook).
+export type RefRow = RefOption & Record<string, any>;
+
+export async function getRefList(key: RefKey): Promise<RefRow[]> {
+  const res = await api.get<Envelope<RefRow[]>>(refEndpoints[key]);
+  return res.data;
+}
+
+// The id field name returned by each master's GET endpoint (needed to PATCH a specific row).
+export const REF_ID_FIELD: Record<RefKey, string> = {
+  roles: 'roleId',
+  leadStatuses: 'statusId',
+  projectTypes: 'typeId',
+  projectStatuses: 'statusId',
+  unitStatuses: 'statusId',
+  budgetRanges: 'budgetId',
+  timelines: 'timelineId',
+  industries: 'industryId',
+  subscriptionPlans: 'planId',
+};
+
+export async function createRefItem(key: RefKey, input: Record<string, any>) {
+  const res = await api.post<Envelope<{ id: number }>>(refEndpoints[key], input);
+  return res.data;
+}
+
+export async function updateRefItem(key: RefKey, id: number | string, input: Record<string, any>) {
+  const res = await api.patch<Envelope<{ id: number }>>(`${refEndpoints[key]}/${id}`, input);
+  return res.data;
 }
 
 // Fallback used only if a given /ref/* endpoint isn't implemented yet by the backend,

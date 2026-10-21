@@ -3,6 +3,7 @@ import { withTransaction } from '../../db/pool';
 import { authenticate, issueImpersonationToken, requireRole } from '../../middleware/auth';
 import { parseOrThrow } from '../../utils/validate';
 import { Errors } from '../../utils/errors';
+import { listEnvelope, parsePagination } from '../../utils/pagination';
 import { writeAuditLog } from '../../services/audit';
 import { updateTenantSchema } from './schemas';
 
@@ -33,10 +34,21 @@ export default async function platformRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate);
   app.addHook('preHandler', requireRole('platformadmin'));
 
-  app.get('/tenants', async () => {
+  app.get('/tenants', async (req) => {
+    const q = req.query as any;
+    const { page, pageSize, offset } = parsePagination(q);
     return withTransaction(async (client) => {
       const res = await client.query(`SELECT * FROM vw_tenant_health ORDER BY tenant_since DESC`);
-      return { data: res.rows.map(mapTenantRow) };
+      let rows = res.rows.map(mapTenantRow);
+      if (q.search) {
+        const needle = String(q.search).toLowerCase();
+        rows = rows.filter((r) => r.name.toLowerCase().includes(needle) || r.slug.toLowerCase().includes(needle));
+      }
+      if (q.status) {
+        rows = rows.filter((r) => r.status === q.status);
+      }
+      const total = rows.length;
+      return listEnvelope(rows.slice(offset, offset + pageSize), page, pageSize, total);
     });
   });
 
