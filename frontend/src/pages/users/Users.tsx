@@ -150,7 +150,7 @@ function UserFormModal({ user, onClose }: { user: User | null; onClose: () => vo
             <label>Role</label>
             <select className="input" required value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
               <option value="">Select…</option>
-              {(roles.data ?? []).map((r) => <option key={r.code} value={r.code}>{r.label}</option>)}
+              {(roles.data ?? []).filter((r) => r.code !== 'platformadmin').map((r) => <option key={r.code} value={r.code}>{r.label}</option>)}
             </select>
           </div>
           <div className="field">
