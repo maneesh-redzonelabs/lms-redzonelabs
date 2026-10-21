@@ -62,9 +62,20 @@ export interface OnboardingStartInput {
 }
 
 export async function onboardingStart(input: OnboardingStartInput) {
+  // Backend's startSchema (.strict()) expects { mobile, email }, not { contactMobile, contactEmail }
+  // - map field names here rather than renaming the form fields throughout OrgSignup.tsx.
   const res = await api.post<Envelope<{ verificationId: string; expiresAt: string }>>(
     '/onboarding/start',
-    input,
+    {
+      orgName: input.orgName,
+      industry: input.industry,
+      country: input.country,
+      timezone: input.timezone,
+      subscriptionPlan: input.subscriptionPlan,
+      contactName: input.contactName,
+      mobile: input.contactMobile,
+      email: input.contactEmail
+    },
     { skipAuth: true }
   );
   return { id: res.data.verificationId, expiresAt: res.data.expiresAt };
@@ -74,7 +85,7 @@ export async function onboardingResendOtp(id: string) {
   await api.post<Envelope<{ expiresAt: string }>>(`/onboarding/${id}/resend-otp`, undefined, { skipAuth: true });
 }
 
-export async function onboardingVerify(id: string, input: { mobileOtp: string; emailOtp: string }) {
+export async function onboardingVerify(id: string, input: { mobileOtp: string; emailOtp: string; password: string }) {
   const res = await api.post<Envelope<{ orgId: string; orgSlug: string }>>(
     `/onboarding/${id}/verify`,
     input,

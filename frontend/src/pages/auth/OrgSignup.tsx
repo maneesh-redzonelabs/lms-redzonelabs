@@ -27,6 +27,7 @@ export default function OrgSignup() {
     contactName: '',
     contactMobile: '',
     contactEmail: '',
+    password: '',
   });
 
   const [mobileOtp, setMobileOtp] = useState('');
@@ -47,6 +48,10 @@ export default function OrgSignup() {
     const emailError = validateEmail(form.contactEmail, true);
     if (emailError) {
       setError(emailError);
+      return;
+    }
+    if (form.password.length < 8) {
+      setError('Password must be at least 8 characters.');
       return;
     }
     setBusy(true);
@@ -80,7 +85,7 @@ export default function OrgSignup() {
     setError(null);
     setBusy(true);
     try {
-      const result = await authApi.onboardingVerify(onboardingId, { mobileOtp, emailOtp });
+      const result = await authApi.onboardingVerify(onboardingId, { mobileOtp, emailOtp, password: form.password });
       setResultOrgSlug(result.orgSlug);
       setStep('done');
     } catch (err) {
@@ -147,6 +152,22 @@ export default function OrgSignup() {
               <div className="field">
                 <label htmlFor="contactEmail">Your email</label>
                 <input id="contactEmail" type="email" className="input" required value={form.contactEmail} onChange={(e) => update('contactEmail', e.target.value)} />
+              </div>
+              <div className="field">
+                <label htmlFor="password">Account password</label>
+                <input
+                  id="password"
+                  type="password"
+                  className="input"
+                  minLength={8}
+                  required
+                  value={form.password}
+                  onChange={(e) => update('password', e.target.value)}
+                />
+                <small className="hint">
+                  At least 8 characters. Sign-in uses a mobile OTP - this password is only needed to confirm sensitive
+                  actions later, like reallocating a unit or editing a Won lead.
+                </small>
               </div>
             </div>
             {error && <div className="alert alert-error">{error}</div>}
