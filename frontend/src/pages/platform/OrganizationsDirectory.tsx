@@ -1,25 +1,22 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useNavigate, Link } from 'react-router-dom';
 import * as platformApi from '../../api/platform';
 import type { Org } from '../../api/types';
 import { DataTable, Column } from '../../components/DataTable';
 import { Pagination } from '../../components/Pagination';
 import { Modal } from '../../components/Modal';
-import { useAuth } from '../../auth/AuthContext';
 import { useToast } from '../../components/Toast';
 import { ApiError } from '../../api/client';
+import { OnboardOrgModal } from './OnboardOrgModal';
 
 export default function OrganizationsDirectory() {
-  const { loginWithToken } = useAuth();
-  const navigate = useNavigate();
-  const { notify } = useToast();
   const queryClient = useQueryClient();
 
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('');
   const [page, setPage] = useState(1);
   const [editingOrg, setEditingOrg] = useState<Org | null>(null);
+  const [onboarding, setOnboarding] = useState(false);
   const pageSize = 20;
 
   const query = useQuery({
@@ -27,38 +24,20 @@ export default function OrganizationsDirectory() {
     queryFn: () => platformApi.listTenants({ search: search || undefined, status: status || undefined, page, pageSize }),
   });
 
-  const impersonateMutation = useMutation({
-    mutationFn: (orgId: string) => platformApi.impersonateTenant(orgId),
-    onSuccess: async (result) => {
-      await loginWithToken(result.token);
-      notify('Signed in as account admin.', 'success');
-      navigate('/dashboard');
-    },
-    onError: (err) => notify(err instanceof ApiError ? err.message : 'Could not impersonate organization.', 'error'),
-  });
-
   const columns: Column<Org>[] = [
     { key: 'name', header: 'Organization', render: (o) => <button className="btn-link" onClick={() => setEditingOrg(o)}>{o.name}</button> },
     { key: 'slug', header: 'Slug', render: (o) => o.slug },
+    { key: 'industry', header: 'Industry', render: (o) => o.industry || '-' },
     { key: 'plan', header: 'Plan', render: (o) => o.subscriptionPlan || '-' },
     { key: 'users', header: 'Users', render: (o) => `${o.usersCount ?? '-'} / ${o.usersMax ?? '-'}` },
     { key: 'status', header: 'Status', render: (o) => <span className={`badge ${o.status === 'active' ? 'badge-active-status' : 'badge-inactive'}`}>{o.status || '-'}</span> },
-    {
-      key: 'actions',
-      header: '',
-      render: (o) => (
-        <button className="btn btn-sm" disabled={impersonateMutation.isPending} onClick={() => impersonateMutation.mutate(o.id)}>
-          Enter as Account Admin
-        </button>
-      ),
-    },
   ];
 
   return (
     <div>
       <div className="card-header">
         <h2>Organizations</h2>
-        <Link to="/signup" className="btn btn-primary">Onboard new organization</Link>
+        <button className="btn btn-primary" onClick={() => setOnboarding(true)}>Onboard new organization</button>
       </div>
 
       <div className="filters-bar">
@@ -77,6 +56,13 @@ export default function OrganizationsDirectory() {
 
       {editingOrg && (
         <EditOrgModal org={editingOrg} onClose={() => setEditingOrg(null)} onSaved={() => queryClient.invalidateQueries({ queryKey: ['platform-tenants'] })} />
+      )}
+
+      {onboarding && (
+        <OnboardOrgModal
+          onClose={() => setOnboarding(false)}
+          onCreated={() => queryClient.invalidateQueries({ queryKey: ['platform-tenants'] })}
+        />
       )}
     </div>
   );

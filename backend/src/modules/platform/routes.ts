@@ -20,6 +20,7 @@ function mapTenantRow(row: any) {
     id: row.org_id,
     name: row.org_name,
     slug: row.org_slug,
+    industry: row.industry,
     subscriptionPlan: row.subscription_plan,
     status,
     usersMax: row.max_users,
@@ -38,7 +39,12 @@ export default async function platformRoutes(app: FastifyInstance) {
     const q = req.query as any;
     const { page, pageSize, offset } = parsePagination(q);
     return withTransaction(async (client) => {
-      const res = await client.query(`SELECT * FROM vw_tenant_health ORDER BY tenant_since DESC`);
+      // vw_tenant_health doesn't expose `industry`, so join organizations for it directly.
+      const res = await client.query(
+        `SELECT vth.*, o.industry FROM vw_tenant_health vth
+         JOIN organizations o ON o.org_id = vth.org_id
+         ORDER BY vth.tenant_since DESC`
+      );
       let rows = res.rows.map(mapTenantRow);
       if (q.search) {
         const needle = String(q.search).toLowerCase();
