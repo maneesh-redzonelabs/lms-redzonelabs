@@ -1,6 +1,13 @@
 import { api, Paginated } from './client';
 import type { User } from './types';
 
+// Every backend route wraps its payload as `{ data: ... }` except paginated list endpoints
+// (which return `{ data: T[], meta }` matching Paginated<T> as-is - see api/auth.ts for the
+// full explanation). Single-object endpoints below unwrap it themselves.
+interface Envelope<T> {
+  data: T;
+}
+
 export type UsersListParams = {
   search?: string;
   status?: string;
@@ -12,8 +19,9 @@ export function listUsers(params: UsersListParams = {}) {
   return api.get<Paginated<User>>('/users', params);
 }
 
-export function getUser(id: string) {
-  return api.get<User>(`/users/${id}`);
+export async function getUser(id: string) {
+  const res = await api.get<Envelope<User>>(`/users/${id}`);
+  return res.data;
 }
 
 export interface CreateUserInput {
@@ -24,14 +32,17 @@ export interface CreateUserInput {
   reportsTo?: string | null;
 }
 
-export function createUser(input: CreateUserInput) {
-  return api.post<User>('/users', input);
+export async function createUser(input: CreateUserInput) {
+  const res = await api.post<Envelope<User>>('/users', input);
+  return res.data;
 }
 
-export function patchUser(id: string, input: Partial<CreateUserInput & { status: string }>) {
-  return api.patch<User>(`/users/${id}`, input);
+export async function patchUser(id: string, input: Partial<CreateUserInput & { status: string }>) {
+  const res = await api.patch<Envelope<User>>(`/users/${id}`, input);
+  return res.data;
 }
 
-export function listManagers() {
-  return api.get<User[]>('/users/managers');
+export async function listManagers() {
+  const res = await api.get<Envelope<User[]>>('/users/managers');
+  return res.data;
 }

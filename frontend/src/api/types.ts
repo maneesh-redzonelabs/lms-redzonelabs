@@ -9,6 +9,7 @@ export interface User {
   status: 'active' | 'inactive' | 'invited';
   reportsTo?: string | null;
   orgId?: string;
+  orgName?: string;
   createdAt?: string;
 }
 

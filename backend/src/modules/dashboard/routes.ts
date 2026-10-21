@@ -23,20 +23,32 @@ export default async function dashboardRoutes(app: FastifyInstance) {
       const leadsByStatus: Record<string, number> = {};
 
       if (visible.length > 0) {
+        // site_visit_date is cast to text here rather than left as a DATE: pg's default DATE
+        // parser builds the JS Date using the Node process's LOCAL timezone (new Date(y, m, d)),
+        // not UTC, so later calling .toISOString() on it re-renders in UTC and silently shifts
+        // the day whenever the process isn't running in UTC (e.g. a server set to IST shifts it
+        // back by a day). Comparing the raw 'YYYY-MM-DD' text avoids that round-trip entirely.
         const leadsRes = await client.query(
-          `SELECT l.lead_id, l.created_at, l.site_visit_date, rs.status_name
+          `SELECT l.lead_id, l.created_at, l.site_visit_date::text AS site_visit_date, rs.status_name
            FROM leads l JOIN ref_lead_statuses rs ON rs.status_id = l.status_id
            WHERE l.org_id = $1 AND l.is_deleted = FALSE AND l.lead_id = ANY($2::int[])`,
           [orgId, visible]
         );
-        const todayStr = new Date().toISOString().slice(0, 10);
+        // "Today" must be the org's local calendar date (Asia/Kolkata), not UTC: toISOString()
+        // always returns the UTC date, which is still "yesterday" until 5:30am IST, so between
+        // midnight and 5:30am IST this undercounted (or missed entirely) leads and site visits
+        // dated "today" in India. en-CA locale formats as YYYY-MM-DD.
+        const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
         for (const row of leadsRes.rows) {
           totalLeads++;
           leadsByStatus[row.status_name] = (leadsByStatus[row.status_name] ?? 0) + 1;
           if (row.status_name === 'Won') wonLeads++;
           if (row.status_name === 'Lost') lostLeads++;
-          if (row.created_at && new Date(row.created_at).toISOString().slice(0, 10) === todayStr) newLeadsToday++;
-          if (row.site_visit_date && new Date(row.site_visit_date).toISOString().slice(0, 10) === todayStr) {
+          // created_at is a timestamptz, so its date-of-day also depends on IST, not UTC.
+          if (row.created_at && new Date(row.created_at).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }) === todayStr) {
+            newLeadsToday++;
+          }
+          if (row.site_visit_date === todayStr) {
             siteVisitsToday++;
           }
         }

@@ -92,7 +92,7 @@ export function AppShell({ platform }: { platform?: boolean }) {
             </svg>
           </div>
           <div className="side-brand-copy">
-            <div className="side-brand-name">{platform ? 'RedZone Labs' : (user?.orgId || 'Account Console')}</div>
+            <div className="side-brand-name">{platform ? 'RedZone Labs' : (user?.orgName || 'Account Console')}</div>
             <div className="side-brand-sub">{platform ? 'Platform Admin' : 'Account Console'}</div>
           </div>
         </div>
