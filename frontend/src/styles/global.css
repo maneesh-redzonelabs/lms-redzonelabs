@@ -318,3 +318,42 @@ table.data-table tr:hover td { background: #fbfaf7; }
   .dash-project-cards { grid-template-columns: 1fr; }
   .quick-row { grid-template-columns: 1fr; }
 }
+
+/* ---------- Users page ---------- */
+.table-toolbar { padding: 10px 12px; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.search { height: 33px; border: 1px solid var(--line); border-radius: 5px; display: flex; align-items: center; padding: 0 9px; gap: 7px; background: var(--white); min-width: 190px; flex: 1; max-width: 350px; }
+.search svg { width: 14px; height: 14px; color: var(--muted); flex: none; }
+.search input { border: 0; outline: 0; width: 100%; font-size: 11px; color: var(--ink); background: transparent; }
+.select-small { height: 33px; padding: 0 24px 0 8px; border: 1px solid var(--line); border-radius: 5px; background: var(--white); color: var(--ink); font-size: 10px; }
+.table-meta { margin-left: auto; color: var(--muted); font-size: 10px; }
+.main-cell { font-weight: 600; font-size: 11px; }
+.subcell { color: var(--muted); font-size: 9px; margin-top: 2px; }
+.pill { display: inline-flex; align-items: center; gap: 5px; border-radius: 20px; padding: 3px 7px; background: var(--green-wash); color: var(--green); font-size: 8px; font-weight: 700; white-space: nowrap; }
+.pill-dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.pill.pending { background: var(--gold-wash); color: var(--gold-dark); }
+.pill.neutral { background: #f0f0ed; color: #6d706a; }
+.pill.off { background: var(--red-wash); color: var(--red); }
+.row-actions { display: flex; gap: 4px; justify-content: flex-end; }
+.small-button { width: 27px; height: 27px; border: 1px solid transparent; border-radius: 4px; background: transparent; color: #687064; display: grid; place-items: center; }
+.small-button:hover { border-color: var(--line); background: var(--white); color: var(--gold-dark); }
+.small-button svg { width: 13px; height: 13px; }
+
+/* ---------- Prototype-style form fields (used by the Users create/edit modal) ---------- */
+.form-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.form-field.full { grid-column: 1 / -1; }
+.form-field > span:first-child { font-size: 9px; font-weight: 700; color: #615a4f; }
+.form-field input, .form-field select, .form-field textarea {
+  border: 1px solid var(--line); border-radius: 4px; padding: 8px 9px; min-height: 35px;
+  color: var(--ink); background: var(--white); font-size: 11px; width: 100%;
+}
+.form-field textarea { min-height: 62px; resize: vertical; }
+.form-field input:disabled, .form-field select:disabled { background: var(--paper); color: var(--muted); }
+.section-label {
+  font-size: 9px; font-weight: 700; letter-spacing: 1.1px; text-transform: uppercase;
+  color: var(--gold-dark); padding: 5px 0 7px; border-bottom: 1px solid var(--line); grid-column: 1 / -1;
+}
+.user-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 760px) {
+  .user-form-grid { grid-template-columns: 1fr; }
+  .form-field.full, .section-label { grid-column: auto; }
+}

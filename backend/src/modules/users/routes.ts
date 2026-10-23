@@ -9,7 +9,9 @@ import { writeAuditLog } from '../../services/audit';
 import { createUserSchema, listUsersQuerySchema, updateUserSchema } from './schemas';
 
 const USER_COLUMNS = `u.user_id, u.org_id, u.full_name, u.mobile, u.email, u.role_id, r.role_name,
-  u.manager_id, u.user_type, u.company_name, u.is_active, u.created_by, u.created_at, u.updated_at, u.last_login_at`;
+  u.manager_id, mgr.full_name AS manager_name, u.user_type, u.company_name, u.is_active, u.created_by,
+  u.created_at, u.updated_at, u.last_login_at`;
+const USER_JOINS = `JOIN ref_roles r ON r.role_id = u.role_id LEFT JOIN users mgr ON mgr.user_id = u.manager_id`;
 
 const REQUIRED_MANAGER_ROLE: Record<string, string | null> = {
   owner: null,
@@ -17,9 +19,9 @@ const REQUIRED_MANAGER_ROLE: Record<string, string | null> = {
   member: 'manager'
 };
 
-// frontend/src/api/types.ts User: id, name, mobile, email, role, status ('active'|'inactive'|
-// 'invited'), reportsTo, orgId, createdAt — not the raw full_name/role_id+role_name/manager_id/
-// is_active column names the DB view/join naturally returns.
+// frontend/src/api/types.ts User: id, name, mobile, email, role, status ('active'|'inactive'),
+// reportsTo, reportsToName, userType, companyName, orgId, createdAt — not the raw full_name/
+// role_id+role_name/manager_id/is_active column names the DB view/join naturally returns.
 function mapUserRow(row: any) {
   if (!row) return row;
   return {
@@ -31,6 +33,7 @@ function mapUserRow(row: any) {
     role: row.role_name,
     status: row.is_active === false ? 'inactive' : 'active',
     reportsTo: row.manager_id,
+    reportsToName: row.manager_name ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     userType: row.user_type,
@@ -49,20 +52,22 @@ export default async function userRoutes(app: FastifyInstance) {
     const { page, pageSize, offset } = parsePagination(req.query);
 
     return withTenantTransaction(orgId, async (client) => {
-      const conditions = ['u.org_id = $1'];
+      // platformadmin is a platform-level role (see seed_platform_admin.sql), never a tenant's
+      // own user — it must never show up in an organization's user list.
+      const conditions = ['u.org_id = $1', "r.role_name <> 'platformadmin'"];
       const params: any[] = [orgId];
       if (q.search) {
         params.push(`%${q.search}%`);
-        conditions.push(`(u.full_name ILIKE $${params.length} OR u.mobile ILIKE $${params.length})`);
+        conditions.push(`(u.full_name ILIKE $${params.length} OR u.mobile ILIKE $${params.length} OR r.role_name ILIKE $${params.length})`);
       }
       if (q.status === 'active') conditions.push('u.is_active = TRUE');
       else if (q.status === 'inactive') conditions.push('u.is_active = FALSE');
 
       const where = conditions.join(' AND ');
-      const countRes = await client.query(`SELECT COUNT(*) FROM users u WHERE ${where}`, params);
+      const countRes = await client.query(`SELECT COUNT(*) FROM users u ${USER_JOINS} WHERE ${where}`, params);
       params.push(pageSize, offset);
       const rows = await client.query(
-        `SELECT ${USER_COLUMNS} FROM users u JOIN ref_roles r ON r.role_id = u.role_id
+        `SELECT ${USER_COLUMNS} FROM users u ${USER_JOINS}
          WHERE ${where} ORDER BY u.created_at DESC LIMIT $${params.length - 1} OFFSET $${params.length}`,
         params
       );
@@ -74,7 +79,7 @@ export default async function userRoutes(app: FastifyInstance) {
     const { orgId } = requireTenant(req);
     return withTenantTransaction(orgId, async (client) => {
       const res = await client.query(
-        `SELECT ${USER_COLUMNS} FROM users u JOIN ref_roles r ON r.role_id = u.role_id
+        `SELECT ${USER_COLUMNS} FROM users u ${USER_JOINS}
          WHERE u.org_id = $1 AND u.is_active = TRUE AND r.role_name IN ('owner','manager')
          ORDER BY r.role_name, u.full_name`,
         [orgId]
@@ -88,7 +93,7 @@ export default async function userRoutes(app: FastifyInstance) {
     const id = parseInt((req.params as any).id, 10);
     return withTenantTransaction(orgId, async (client) => {
       const res = await client.query(
-        `SELECT ${USER_COLUMNS} FROM users u JOIN ref_roles r ON r.role_id = u.role_id WHERE u.user_id = $1 AND u.org_id = $2`,
+        `SELECT ${USER_COLUMNS} FROM users u ${USER_JOINS} WHERE u.user_id = $1 AND u.org_id = $2`,
         [id, orgId]
       );
       if (res.rows.length === 0) throw Errors.notFound('User not found');
@@ -240,7 +245,7 @@ export default async function userRoutes(app: FastifyInstance) {
         });
 
         const res = await client.query(
-          `SELECT ${USER_COLUMNS} FROM users u JOIN ref_roles r ON r.role_id = u.role_id WHERE u.user_id = $1 AND u.org_id = $2`,
+          `SELECT ${USER_COLUMNS} FROM users u ${USER_JOINS} WHERE u.user_id = $1 AND u.org_id = $2`,
           [id, orgId]
         );
         return mapUserRow(res.rows[0]);

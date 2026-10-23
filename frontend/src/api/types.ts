@@ -6,8 +6,11 @@ export interface User {
   mobile: string;
   email?: string;
   role: Role;
-  status: 'active' | 'inactive' | 'invited';
+  status: 'active' | 'inactive';
   reportsTo?: string | null;
+  reportsToName?: string | null;
+  userType?: 'Internal' | 'External';
+  companyName?: string | null;
   orgId?: string;
   orgName?: string;
   createdAt?: string;

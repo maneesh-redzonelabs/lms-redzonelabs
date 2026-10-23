@@ -30,6 +30,9 @@ export interface CreateUserInput {
   email?: string;
   role: string;
   reportsTo?: string | null;
+  userType?: 'Internal' | 'External';
+  companyName?: string;
+  initialPassword?: string;
 }
 
 export async function createUser(input: CreateUserInput) {
