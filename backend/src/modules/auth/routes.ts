@@ -29,7 +29,8 @@ async function findLoginUserByMobile(client: any, mobile: string) {
   const res = await client.query(
     `SELECT u.user_id, u.org_id, u.full_name, u.mobile, u.email, u.user_type, u.company_name,
             u.manager_id, u.is_active, u.created_at, r.role_name, r.view_scope,
-            o.org_name, o.logo_url AS org_logo_url, o.is_active AS org_is_active, o.subscription_status
+            o.org_name, o.logo_url AS org_logo_url, o.is_active AS org_is_active, o.subscription_status,
+            o.org_status
      FROM users u
      JOIN ref_roles r ON r.role_id = u.role_id
      JOIN organizations o ON o.org_id = u.org_id
@@ -60,6 +61,15 @@ function userProfile(row: any) {
     userType: row.user_type,
     companyName: row.company_name
   };
+}
+
+// account_admin_lms_desktop_v_1.4.1.html's sendOtp() blocks login at the mobile-entry step for a
+// Pending or Suspended organization, before an OTP is even sent, with these exact messages.
+// platformadmin has no org_status to check (org_status is null/irrelevant for its home org row).
+function checkOrgStatus(user: { org_status: string | null; role_name: string }) {
+  if (user.role_name === 'platformadmin') return;
+  if (user.org_status === 'Pending') throw Errors.tenantPending();
+  if (user.org_status === 'Suspended') throw Errors.tenantSuspended();
 }
 
 export default async function authRoutes(app: FastifyInstance) {
@@ -121,6 +131,7 @@ export default async function authRoutes(app: FastifyInstance) {
     const body = parseOrThrow(sendLoginOtpSchema, req.body);
     const user = await withTransaction((client) => findLoginUserByMobile(client, body.mobile));
     if (!user) throw Errors.notFound('This mobile number is not registered for platform access.');
+    checkOrgStatus(user);
     sendOtp('sms', body.mobile, 'login');
     return { data: { sent: true } };
   });
@@ -139,8 +150,9 @@ export default async function authRoutes(app: FastifyInstance) {
       const u = await findLoginUserByMobile(client, body.mobile);
       if (!u) throw Errors.invalidCredentials();
 
+      checkOrgStatus(u);
       if (!u.org_is_active || ['suspended', 'cancelled'].includes(u.subscription_status)) {
-        throw Errors.tenantSuspended();
+        throw Errors.tenantSuspended('Organization is suspended or inactive');
       }
 
       await client.query(`UPDATE users SET last_login_at = CURRENT_TIMESTAMP WHERE user_id = $1`, [u.user_id]);

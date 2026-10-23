@@ -19,7 +19,11 @@ export const Errors = {
   trialExpired: () => new AppError(402, 'TRIAL_EXPIRED', 'Organization trial period has expired'),
   forbiddenRole: (msg = 'You do not have permission to perform this action') =>
     new AppError(403, 'FORBIDDEN_ROLE', msg),
-  tenantSuspended: () => new AppError(403, 'TENANT_SUSPENDED', 'Organization is suspended or inactive'),
+  tenantSuspended: (msg = 'Your organization is in suspended status, contact your Admin.') =>
+    new AppError(403, 'TENANT_SUSPENDED', msg),
+  tenantPending: (
+    msg = 'Your organization is pending verification. Please contact RedZone Labs support.'
+  ) => new AppError(403, 'TENANT_PENDING', msg),
   notFound: (msg = 'Resource not found') => new AppError(404, 'NOT_FOUND', msg),
   duplicateMobile: (msg = 'A record with this mobile number already exists') =>
     new AppError(409, 'DUPLICATE_MOBILE', msg),

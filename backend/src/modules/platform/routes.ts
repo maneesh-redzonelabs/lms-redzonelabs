@@ -8,9 +8,11 @@ import { writeAuditLog } from '../../services/audit';
 import { updateTenantSchema } from './schemas';
 
 // frontend/src/api/types.ts Org: id, name, slug, industry, country, timezone, subscriptionPlan,
-// status, usersMax, usersCount, createdAt — vw_tenant_health exposes org_id/org_name/org_slug/
-// max_users/active_users/tenant_since instead, and has no single `status` field (it's derived
-// from onboarding_complete + is_active + subscription_status).
+// status, orgStatus, usersMax, usersCount, trialEndsAt, createdAt — vw_tenant_health exposes
+// org_id/org_name/org_slug/max_users/active_users/tenant_since instead, and has no single
+// `status` field (it's derived from onboarding_complete + is_active + subscription_status).
+// `orgStatus` is a distinct, real column (Pending/Active/Suspended - the platformadmin
+// verification gate) kept separate from this derived billing-lifecycle `status`.
 function mapTenantRow(row: any) {
   let status: string;
   if (!row.onboarding_complete) status = 'pending';
@@ -21,12 +23,17 @@ function mapTenantRow(row: any) {
     name: row.org_name,
     slug: row.org_slug,
     industry: row.industry,
+    country: row.country,
+    timezone: row.timezone,
     subscriptionPlan: row.subscription_plan,
     status,
+    orgStatus: row.org_status,
     usersMax: row.max_users,
     usersCount: row.active_users !== undefined ? Number(row.active_users) : undefined,
     activeProjects: row.active_projects !== undefined ? Number(row.active_projects) : undefined,
     totalLeads: row.total_leads !== undefined ? Number(row.total_leads) : undefined,
+    trialEndsAt: row.trial_ends_at,
+    primaryContactMobile: row.primary_contact_mobile,
     createdAt: row.tenant_since
   };
 }
@@ -39,9 +46,11 @@ export default async function platformRoutes(app: FastifyInstance) {
     const q = req.query as any;
     const { page, pageSize, offset } = parsePagination(q);
     return withTransaction(async (client) => {
-      // vw_tenant_health doesn't expose `industry`, so join organizations for it directly.
+      // vw_tenant_health doesn't expose `industry`/`country`/`timezone`/`org_status`/
+      // `primary_contact_mobile`, so join organizations for them directly.
       const res = await client.query(
-        `SELECT vth.*, o.industry FROM vw_tenant_health vth
+        `SELECT vth.*, o.industry, o.country, o.timezone, o.org_status, o.primary_contact_mobile
+         FROM vw_tenant_health vth
          JOIN organizations o ON o.org_id = vth.org_id
          ORDER BY vth.tenant_since DESC`
       );
@@ -52,6 +61,9 @@ export default async function platformRoutes(app: FastifyInstance) {
       }
       if (q.status) {
         rows = rows.filter((r) => r.status === q.status);
+      }
+      if (q.orgStatus) {
+        rows = rows.filter((r) => r.orgStatus === q.orgStatus);
       }
       const total = rows.length;
       return listEnvelope(rows.slice(offset, offset + pageSize), page, pageSize, total);
@@ -66,6 +78,17 @@ export default async function platformRoutes(app: FastifyInstance) {
       const existing = await client.query(`SELECT * FROM organizations WHERE org_id = $1`, [orgId]);
       if (existing.rows.length === 0) throw Errors.notFound('Tenant not found');
 
+      // platformEditOrganization's duplicate-admin-mobile guard (data.organizations.some(...)).
+      if (body.primaryContactMobile !== undefined) {
+        const dupe = await client.query(
+          `SELECT 1 FROM organizations WHERE primary_contact_mobile = $1 AND org_id <> $2`,
+          [body.primaryContactMobile, orgId]
+        );
+        if (dupe.rows.length > 0) {
+          throw Errors.validation({ primaryContactMobile: 'This mobile number is already registered to another organization' });
+        }
+      }
+
       const colMap: Record<string, string> = {
         subscriptionPlan: 'subscription_plan',
         subscriptionStatus: 'subscription_status',
@@ -73,7 +96,12 @@ export default async function platformRoutes(app: FastifyInstance) {
         subscriptionEndsAt: 'subscription_ends_at',
         maxUsers: 'max_users',
         maxProjects: 'max_projects',
-        isActive: 'is_active'
+        isActive: 'is_active',
+        orgStatus: 'org_status',
+        orgName: 'org_name',
+        industry: 'industry',
+        timezone: 'timezone',
+        primaryContactMobile: 'primary_contact_mobile'
       };
       const sets: string[] = [];
       const params: any[] = [];
@@ -98,7 +126,14 @@ export default async function platformRoutes(app: FastifyInstance) {
         await client.query(`UPDATE organizations SET ${sets.join(', ')} WHERE org_id = $${params.length}`, params);
       }
 
-      const becameInactive = body.isActive === false || body.subscriptionStatus === 'suspended' || body.status === 'suspended';
+      // Suspending via either status field (or deactivating outright) kills active sessions,
+      // matching platformSaveOrgStatus's "Suspended users see ... contact your Admin" intent -
+      // a Suspended org's users shouldn't stay signed in on an existing token.
+      const becameInactive =
+        body.isActive === false ||
+        body.subscriptionStatus === 'suspended' ||
+        body.status === 'suspended' ||
+        body.orgStatus === 'Suspended';
       if (becameInactive) {
         await client.query(`UPDATE user_sessions SET is_active = FALSE WHERE org_id = $1`, [orgId]);
       }
@@ -114,7 +149,13 @@ export default async function platformRoutes(app: FastifyInstance) {
         ipAddress: req.ip
       });
 
-      const res = await client.query(`SELECT * FROM vw_tenant_health WHERE org_id = $1`, [orgId]);
+      const res = await client.query(
+        `SELECT vth.*, o.industry, o.country, o.timezone, o.org_status, o.primary_contact_mobile
+         FROM vw_tenant_health vth
+         JOIN organizations o ON o.org_id = vth.org_id
+         WHERE vth.org_id = $1`,
+        [orgId]
+      );
       return mapTenantRow(res.rows[0]);
     });
     return { data: result };

@@ -32,8 +32,13 @@ export interface Org {
   timezone?: string;
   subscriptionPlan?: string;
   status?: string;
+  orgStatus?: 'Pending' | 'Active' | 'Suspended';
   usersMax?: number;
   usersCount?: number;
+  activeProjects?: number;
+  totalLeads?: number;
+  trialEndsAt?: string | null;
+  primaryContactMobile?: string;
   createdAt?: string;
 }
 

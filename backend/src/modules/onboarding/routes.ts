@@ -175,12 +175,15 @@ export default async function onboardingRoutes(app: FastifyInstance) {
         suffix += 1;
       }
 
+      // org_status starts 'Pending' for every self-service signup (matches the prototype's
+      // orgStatus:'Pending' on creation) - a platformadmin must Verify it to Active before any
+      // of its users can sign in (see checkOrgStatus() in auth/routes.ts).
       const orgRes = await client.query(
         `INSERT INTO organizations
            (org_name, org_slug, industry, country, timezone, subscription_plan, subscription_status,
             trial_ends_at, max_users, max_projects, onboarding_step, onboarding_complete, logo_url,
-            primary_contact_name, primary_contact_mobile, primary_contact_email, is_active)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,5,TRUE,$11,$12,$13,$14,TRUE)
+            org_status, primary_contact_name, primary_contact_mobile, primary_contact_email, is_active)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,5,TRUE,$11,'Pending',$12,$13,$14,TRUE)
          RETURNING org_id, org_slug`,
         [
           row.org_name,
