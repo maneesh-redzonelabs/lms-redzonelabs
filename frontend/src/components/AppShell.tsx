@@ -87,9 +87,13 @@ export function AppShell({ platform }: { platform?: boolean }) {
       <aside className={`sidebar${sidebarOpen ? ' open' : ''}`}>
         <div className="side-brand">
           <div className="brand-logo-frame">
-            <svg width="26" height="20" viewBox="0 0 24 24" fill="none" stroke="#9a7440" strokeWidth="2">
-              <path d="M3 21h18M5 21V7l7-4 7 4v14" />
-            </svg>
+            {!platform && user?.orgLogoUrl ? (
+              <img className="brand-logo" src={user.orgLogoUrl} alt={`${user.orgName || 'Organization'} logo`} />
+            ) : (
+              <svg width="26" height="20" viewBox="0 0 24 24" fill="none" stroke="#9a7440" strokeWidth="2">
+                <path d="M3 21h18M5 21V7l7-4 7 4v14" />
+              </svg>
+            )}
           </div>
           <div className="side-brand-copy">
             <div className="side-brand-name">{platform ? 'RedZone Labs' : (user?.orgName || 'Account Console')}</div>

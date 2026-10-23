@@ -29,7 +29,7 @@ async function findLoginUserByMobile(client: any, mobile: string) {
   const res = await client.query(
     `SELECT u.user_id, u.org_id, u.full_name, u.mobile, u.email, u.user_type, u.company_name,
             u.manager_id, u.is_active, u.created_at, r.role_name, r.view_scope,
-            o.org_name, o.is_active AS org_is_active, o.subscription_status
+            o.org_name, o.logo_url AS org_logo_url, o.is_active AS org_is_active, o.subscription_status
      FROM users u
      JOIN ref_roles r ON r.role_id = u.role_id
      JOIN organizations o ON o.org_id = u.org_id
@@ -41,13 +41,14 @@ async function findLoginUserByMobile(client: any, mobile: string) {
 }
 
 // frontend/src/api/types.ts User (consumed via AuthSession.user and GET /auth/me) expects
-// { id, name, mobile, email, role, status, reportsTo, orgId, orgName, createdAt } — not the raw
-// userId/fullName/managerId column names.
+// { id, name, mobile, email, role, status, reportsTo, orgId, orgName, orgLogoUrl, createdAt } —
+// not the raw userId/fullName/managerId column names.
 function userProfile(row: any) {
   return {
     id: row.user_id,
     orgId: row.org_id,
     orgName: row.org_name,
+    orgLogoUrl: row.org_logo_url,
     name: row.full_name,
     mobile: row.mobile,
     email: row.email,
@@ -269,7 +270,7 @@ export default async function authRoutes(app: FastifyInstance) {
     const result = await withTransaction(async (client) => {
       const userRes = await client.query(
         `SELECT u.user_id, u.org_id, u.full_name, u.mobile, u.email, u.user_type, u.company_name, u.manager_id,
-                u.is_active, u.created_at, r.role_name, r.view_scope, o.org_name
+                u.is_active, u.created_at, r.role_name, r.view_scope, o.org_name, o.logo_url AS org_logo_url
          FROM users u
          JOIN ref_roles r ON r.role_id = u.role_id
          JOIN organizations o ON o.org_id = u.org_id
@@ -320,7 +321,7 @@ export default async function authRoutes(app: FastifyInstance) {
       const res = await client.query(
         `SELECT u.user_id, u.org_id, u.full_name, u.mobile, u.email, u.user_type, u.company_name, u.manager_id,
                 u.is_active, u.created_at, r.role_id, r.role_name, r.view_scope, r.can_create_users, r.can_create_projects,
-                o.org_name
+                o.org_name, o.logo_url AS org_logo_url
          FROM users u
          JOIN ref_roles r ON r.role_id = u.role_id
          JOIN organizations o ON o.org_id = u.org_id

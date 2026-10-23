@@ -12,7 +12,6 @@ type Step = 'form' | 'otp' | 'done';
 // prospects signing themselves up and is intentionally left untouched.
 export function OnboardOrgModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
   const industries = useReferenceData('industries');
-  const plans = useReferenceData('subscriptionPlans');
 
   const [step, setStep] = useState<Step>('form');
   const [onboardingId, setOnboardingId] = useState<string | null>(null);
@@ -25,7 +24,6 @@ export function OnboardOrgModal({ onClose, onCreated }: { onClose: () => void; o
     industry: '',
     country: 'India',
     timezone: 'Asia/Kolkata',
-    subscriptionPlan: '',
     contactName: '',
     contactMobile: '',
     contactEmail: '',
@@ -109,13 +107,6 @@ export function OnboardOrgModal({ onClose, onCreated }: { onClose: () => void; o
               <select id="industry" className="input" required value={form.industry} onChange={(e) => update('industry', e.target.value)}>
                 <option value="">Select…</option>
                 {(industries.data ?? []).map((o) => <option key={o.code} value={o.code}>{o.label}</option>)}
-              </select>
-            </div>
-            <div className="field">
-              <label htmlFor="plan">Subscription plan</label>
-              <select id="plan" className="input" required value={form.subscriptionPlan} onChange={(e) => update('subscriptionPlan', e.target.value)}>
-                <option value="">Select…</option>
-                {(plans.data ?? []).map((o) => <option key={o.code} value={o.code}>{o.label}</option>)}
               </select>
             </div>
             <div className="field">

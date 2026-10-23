@@ -49,13 +49,13 @@ export async function me() {
   return res.data;
 }
 
-// Self-service onboarding (public, no auth)
+// Self-service onboarding (public, no auth). Every signup starts on the 'trial' plan - the
+// prototype never offers a plan choice here, and the backend's startSchema doesn't accept one.
 export interface OnboardingStartInput {
   orgName: string;
   industry: string;
   country: string;
   timezone: string;
-  subscriptionPlan: string;
   contactName: string;
   contactMobile: string;
   contactEmail: string;
@@ -71,7 +71,6 @@ export async function onboardingStart(input: OnboardingStartInput) {
       industry: input.industry,
       country: input.country,
       timezone: input.timezone,
-      subscriptionPlan: input.subscriptionPlan,
       contactName: input.contactName,
       mobile: input.contactMobile,
       email: input.contactEmail
@@ -79,6 +78,16 @@ export async function onboardingStart(input: OnboardingStartInput) {
     { skipAuth: true }
   );
   return { id: res.data.verificationId, expiresAt: res.data.expiresAt };
+}
+
+export async function onboardingUploadLogo(id: string, file: File) {
+  const formData = new FormData();
+  formData.append('logo', file);
+  const res = await api.post<Envelope<{ logoUrl: string }>>(`/onboarding/${id}/logo`, formData, {
+    skipAuth: true,
+    isFormData: true
+  });
+  return res.data;
 }
 
 export async function onboardingResendOtp(id: string) {

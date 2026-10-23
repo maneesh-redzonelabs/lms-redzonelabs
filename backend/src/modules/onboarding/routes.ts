@@ -1,6 +1,8 @@
 import { FastifyInstance } from 'fastify';
 import bcrypt from 'bcrypt';
 import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
 import { withTransaction } from '../../db/pool';
 import { parseOrThrow } from '../../utils/validate';
 import { Errors } from '../../utils/errors';
@@ -13,6 +15,12 @@ import { startSchema, resendOtpSchema, verifySchema, paymentStubSchema } from '.
 const OTP_TTL_MIN = 15;
 const BCRYPT_COST = 12;
 
+// frontend/src/pages/auth/OrgSignup.tsx: the prototype's org-signup form lets the signer attach
+// an optional .png logo before creating the organization. The upload is tied to the in-progress
+// onboarding_verifications row (there's no org row yet) and only copied onto the organization
+// once /verify succeeds — an abandoned/never-verified signup just leaves an orphan file on disk.
+const UPLOAD_ROOT = path.join(__dirname, '..', '..', '..', 'uploads', 'org-logos');
+
 export default async function onboardingRoutes(app: FastifyInstance) {
   app.post('/start', async (req) => {
     const body = parseOrThrow(startSchema, req.body);
@@ -24,18 +32,19 @@ export default async function onboardingRoutes(app: FastifyInstance) {
     const expiresAt = new Date(Date.now() + OTP_TTL_MIN * 60000);
 
     const verificationId = await withTransaction(async (client) => {
+      // subscription_plan is intentionally omitted here - the column's own DEFAULT 'trial'
+      // applies, since self-service signup never lets the client choose a plan (see schemas.ts).
       const res = await client.query(
         `INSERT INTO onboarding_verifications
-           (org_name, industry, country, timezone, subscription_plan, contact_name, mobile, email,
+           (org_name, industry, country, timezone, contact_name, mobile, email,
             mobile_otp_hash, email_otp_hash, expires_at, ip_address)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
          RETURNING verification_id`,
         [
           body.orgName,
           body.industry,
           body.country,
           body.timezone,
-          body.subscriptionPlan,
           body.contactName,
           body.mobile,
           body.email,
@@ -51,6 +60,41 @@ export default async function onboardingRoutes(app: FastifyInstance) {
     sendOtp('email', body.email, `onboarding verification #${verificationId}`);
 
     return { data: { verificationId: String(verificationId), expiresAt } };
+  });
+
+  app.post('/:verificationId/logo', async (req) => {
+    const { verificationId } = req.params as { verificationId: string };
+
+    const existing = await withTransaction(async (client) => {
+      const res = await client.query(
+        `SELECT verification_id, verified_at FROM onboarding_verifications WHERE verification_id = $1`,
+        [verificationId]
+      );
+      return res.rows[0];
+    });
+    if (!existing) throw Errors.notFound('Verification not found');
+    if (existing.verified_at) throw Errors.validation({ verification: 'already verified' });
+
+    const file = await req.file();
+    if (!file) throw Errors.validation({ logo: 'No file uploaded' });
+    if (file.mimetype !== 'image/png') {
+      throw Errors.validation({ logo: 'Organization logo must be a .png file' });
+    }
+
+    const buffer = await file.toBuffer();
+    fs.mkdirSync(UPLOAD_ROOT, { recursive: true });
+    const filename = `${verificationId}-${crypto.randomBytes(8).toString('hex')}.png`;
+    fs.writeFileSync(path.join(UPLOAD_ROOT, filename), buffer);
+    const logoUrl = `/uploads/org-logos/${filename}`;
+
+    await withTransaction(async (client) => {
+      await client.query(`UPDATE onboarding_verifications SET logo_url = $1 WHERE verification_id = $2`, [
+        logoUrl,
+        verificationId
+      ]);
+    });
+
+    return { data: { logoUrl } };
   });
 
   app.post('/:verificationId/resend-otp', async (req) => {
@@ -134,9 +178,9 @@ export default async function onboardingRoutes(app: FastifyInstance) {
       const orgRes = await client.query(
         `INSERT INTO organizations
            (org_name, org_slug, industry, country, timezone, subscription_plan, subscription_status,
-            trial_ends_at, max_users, max_projects, onboarding_step, onboarding_complete,
+            trial_ends_at, max_users, max_projects, onboarding_step, onboarding_complete, logo_url,
             primary_contact_name, primary_contact_mobile, primary_contact_email, is_active)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,5,TRUE,$11,$12,$13,TRUE)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,5,TRUE,$11,$12,$13,$14,TRUE)
          RETURNING org_id, org_slug`,
         [
           row.org_name,
@@ -149,6 +193,7 @@ export default async function onboardingRoutes(app: FastifyInstance) {
           trialEndsAt,
           max_users,
           max_projects,
+          row.logo_url,
           row.contact_name,
           row.mobile,
           row.email

@@ -2,6 +2,9 @@ import Fastify, { FastifyInstance } from 'fastify';
 import helmet from '@fastify/helmet';
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
+import fastifyStatic from '@fastify/static';
+import fs from 'fs';
+import path from 'path';
 import { randomUUID } from 'crypto';
 import { env } from './config/env';
 import { AppError } from './utils/errors';
@@ -22,7 +25,7 @@ import refRoutes from './modules/ref/routes';
 import platformRoutes from './modules/platform/routes';
 import auditLogRoutes from './modules/auditLogs/routes';
 
-const PUBLIC_PREFIXES = ['/api/v1/auth/', '/api/v1/onboarding/', '/api/v1/ref/'];
+const PUBLIC_PREFIXES = ['/api/v1/auth/', '/api/v1/onboarding/', '/api/v1/ref/', '/uploads/'];
 
 export function buildApp(): FastifyInstance {
   const app = Fastify({
@@ -39,7 +42,18 @@ export function buildApp(): FastifyInstance {
     credentials: true
   });
   app.register(multipart, {
-    limits: { fileSize: 5 * 1024 * 1024 } // 5MB cap for bulk-import uploads
+    limits: { fileSize: 5 * 1024 * 1024 } // 5MB cap for bulk-import and org-logo uploads
+  });
+  // Serves uploaded organization logos (backend/uploads/org-logos/*.png) - publicly readable,
+  // same as the prototype's sidebar/brand logo image, which needs no authentication to display.
+  // @fastify/static requires `root` to exist at registration time (uploads/ is gitignored, so a
+  // fresh checkout won't have it yet) - create it eagerly rather than relying on the upload
+  // route's own mkdirSync, which only runs much later, on the first upload.
+  const uploadsRoot = path.join(__dirname, '..', 'uploads');
+  fs.mkdirSync(path.join(uploadsRoot, 'org-logos'), { recursive: true });
+  app.register(fastifyStatic, {
+    root: uploadsRoot,
+    prefix: '/uploads/'
   });
 
   // Generic authenticated-user rate limit (100/min/user) - login/onboarding endpoints have

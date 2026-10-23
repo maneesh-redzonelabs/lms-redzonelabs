@@ -7,10 +7,20 @@ import { validateEmail, validateMobile } from '../../utils/validators';
 
 type Step = 'form' | 'otp' | 'done';
 
+// Matches the prototype's ORG_SIGNUP_TIMEZONES exactly - these are stored as-is in the
+// organization's `timezone` column, which is only ever displayed back, never parsed as an
+// IANA zone identifier.
+const TIMEZONES = [
+  '(GMT+5:30) India Standard Time',
+  '(GMT+4:00) Gulf Standard Time',
+  '(GMT+8:00) Singapore Standard Time',
+  '(GMT+1:00) Central European Time',
+  '(GMT-5:00) Eastern Time (US & Canada)',
+];
+
 export default function OrgSignup() {
   const navigate = useNavigate();
   const industries = useReferenceData('industries');
-  const plans = useReferenceData('subscriptionPlans');
 
   const [step, setStep] = useState<Step>('form');
   const [onboardingId, setOnboardingId] = useState<string | null>(null);
@@ -21,18 +31,41 @@ export default function OrgSignup() {
   const [form, setForm] = useState({
     orgName: '',
     industry: '',
-    country: 'India',
-    timezone: 'Asia/Kolkata',
-    subscriptionPlan: '',
+    timezone: TIMEZONES[0],
     contactName: '',
     contactMobile: '',
     contactEmail: '',
   });
+  const [logoFile, setLogoFile] = useState<File | null>(null);
+  const [logoError, setLogoError] = useState<string | null>(null);
 
   const [emailOtp, setEmailOtp] = useState('');
 
   function update<K extends keyof typeof form>(key: K, value: string) {
     setForm((f) => ({ ...f, [key]: value }));
+  }
+
+  function handleLogoChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0] ?? null;
+    if (!file) {
+      setLogoFile(null);
+      setLogoError(null);
+      return;
+    }
+    if (file.type !== 'image/png') {
+      setLogoError('Organization logo must be a .png file.');
+      e.target.value = '';
+      setLogoFile(null);
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setLogoError('Organization logo must be 5 MB or smaller.');
+      e.target.value = '';
+      setLogoFile(null);
+      return;
+    }
+    setLogoError(null);
+    setLogoFile(file);
   }
 
   async function handleStart(e: React.FormEvent) {
@@ -50,7 +83,15 @@ export default function OrgSignup() {
     }
     setBusy(true);
     try {
-      const result = await authApi.onboardingStart(form);
+      const result = await authApi.onboardingStart({ ...form, country: 'India' });
+      if (logoFile) {
+        try {
+          await authApi.onboardingUploadLogo(result.id, logoFile);
+        } catch {
+          // Logo upload failing shouldn't block signup - the organization is created without
+          // a logo (falls back to the initials placeholder), same as skipping the field.
+        }
+      }
       setOnboardingId(result.id);
       setStep('otp');
     } catch (err) {
@@ -108,50 +149,48 @@ export default function OrgSignup() {
 
         {step === 'form' && (
           <form onSubmit={handleStart}>
+            <div className="alert alert-info" style={{ marginBottom: 14 }}>This primary contact will be the Admin for the Organization.</div>
             <div className="field">
-              <label htmlFor="orgName">Organization name</label>
+              <label htmlFor="orgName">Organization Name *</label>
               <input id="orgName" className="input" required value={form.orgName} onChange={(e) => update('orgName', e.target.value)} />
             </div>
             <div className="form-grid">
               <div className="field">
-                <label htmlFor="industry">Industry</label>
+                <label htmlFor="industry">Industry *</label>
                 <select id="industry" className="input" required value={form.industry} onChange={(e) => update('industry', e.target.value)}>
                   <option value="">Select…</option>
                   {(industries.data ?? []).map((o) => <option key={o.code} value={o.code}>{o.label}</option>)}
                 </select>
               </div>
               <div className="field">
-                <label htmlFor="plan">Subscription plan</label>
-                <select id="plan" className="input" required value={form.subscriptionPlan} onChange={(e) => update('subscriptionPlan', e.target.value)}>
-                  <option value="">Select…</option>
-                  {(plans.data ?? []).map((o) => <option key={o.code} value={o.code}>{o.label}</option>)}
+                <label htmlFor="timezone">Time Zone *</label>
+                <select id="timezone" className="input" required value={form.timezone} onChange={(e) => update('timezone', e.target.value)}>
+                  {TIMEZONES.map((tz) => <option key={tz} value={tz}>{tz}</option>)}
                 </select>
               </div>
-              <div className="field">
-                <label htmlFor="country">Country</label>
-                <input id="country" className="input" required value={form.country} onChange={(e) => update('country', e.target.value)} />
+              <div className="field" style={{ gridColumn: '1 / -1' }}>
+                <label htmlFor="orgLogo">Organization Logo</label>
+                <input id="orgLogo" className="input" type="file" accept=".png,image/png" onChange={handleLogoChange} />
+                <span className="hint">Optional. Accepts .png files only, up to 5 MB.</span>
+                {logoError && <span className="error">{logoError}</span>}
               </div>
               <div className="field">
-                <label htmlFor="timezone">Timezone</label>
-                <input id="timezone" className="input" required value={form.timezone} onChange={(e) => update('timezone', e.target.value)} />
-              </div>
-              <div className="field">
-                <label htmlFor="contactName">Your name</label>
+                <label htmlFor="contactName">Primary Contact Name *</label>
                 <input id="contactName" className="input" required value={form.contactName} onChange={(e) => update('contactName', e.target.value)} />
               </div>
               <div className="field">
-                <label htmlFor="contactMobile">Your mobile number</label>
-                <input id="contactMobile" className="input" required value={form.contactMobile} onChange={(e) => update('contactMobile', e.target.value)} />
+                <label htmlFor="contactMobile">Mobile No. *</label>
+                <input id="contactMobile" className="input" maxLength={10} required value={form.contactMobile} onChange={(e) => update('contactMobile', e.target.value)} />
               </div>
               <div className="field">
-                <label htmlFor="contactEmail">Your email</label>
+                <label htmlFor="contactEmail">Email id *</label>
                 <input id="contactEmail" type="email" className="input" required value={form.contactEmail} onChange={(e) => update('contactEmail', e.target.value)} />
               </div>
             </div>
             {error && <div className="alert alert-error">{error}</div>}
             <div className="form-actions">
               <button type="submit" className="btn btn-primary" disabled={busy}>
-                {busy ? 'Starting…' : 'Create organization'}
+                {busy ? 'Submitting…' : 'Submit'}
               </button>
             </div>
           </form>
@@ -160,10 +199,10 @@ export default function OrgSignup() {
         {step === 'otp' && (
           <form onSubmit={handleVerify}>
             <div className="auth-note">
-              Demo verification code: <b>123456</b>. We'll integrate real email delivery later.
+              We've sent a one-time verification code to {form.contactEmail}. Demo code: <b>123456</b>.
             </div>
             <div className="field">
-              <label htmlFor="emailOtp">Email verification code</label>
+              <label htmlFor="emailOtp">Verification code *</label>
               <input
                 id="emailOtp"
                 className="input"
@@ -178,7 +217,7 @@ export default function OrgSignup() {
             <div className="form-actions">
               <button type="button" className="btn" onClick={handleResend} disabled={busy}>Resend codes</button>
               <button type="submit" className="btn btn-primary" disabled={busy}>
-                {busy ? 'Verifying…' : 'Verify & activate'}
+                {busy ? 'Verifying…' : 'Verify & create organization'}
               </button>
             </div>
           </form>
@@ -187,8 +226,8 @@ export default function OrgSignup() {
         {step === 'done' && (
           <div>
             <div className="alert alert-info">
-              Your organization{resultOrgSlug ? ` (${resultOrgSlug})` : ''} has been created. You can now sign in with your
-              registered mobile number.
+              Organization and primary contact created successfully{resultOrgSlug ? ` (${resultOrgSlug})` : ''}. You can
+              now sign in with your registered mobile number.
             </div>
             <div className="form-actions">
               <button className="btn btn-primary" onClick={() => navigate('/login')}>Go to sign in</button>

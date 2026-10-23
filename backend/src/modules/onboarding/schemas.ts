@@ -1,13 +1,15 @@
 import { z } from 'zod';
 import { emailSchema, mobileSchema } from '../../utils/validators';
 
+// Self-service signup always starts an organization on the 'trial' plan (matches the prototype,
+// which never offers a plan choice at signup) - subscriptionPlan is therefore not client input;
+// upgrading plans is a separate, later action (platform admin / billing), not part of signup.
 export const startSchema = z
   .object({
     orgName: z.string().min(2).max(150),
     industry: z.string().min(2).max(60),
     country: z.string().min(2).max(60),
     timezone: z.string().min(2).max(60),
-    subscriptionPlan: z.enum(['trial', 'starter', 'professional', 'enterprise']),
     contactName: z.string().min(2).max(100),
     mobile: mobileSchema,
     email: emailSchema

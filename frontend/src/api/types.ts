@@ -13,6 +13,7 @@ export interface User {
   companyName?: string | null;
   orgId?: string;
   orgName?: string;
+  orgLogoUrl?: string | null;
   createdAt?: string;
 }
 
