@@ -20,6 +20,7 @@ export default async function dashboardRoutes(app: FastifyInstance) {
       let wonLeads = 0;
       let lostLeads = 0;
       let siteVisitsToday = 0;
+      let unassignedLeads = 0;
       const leadsByStatus: Record<string, number> = {};
 
       if (visible.length > 0) {
@@ -29,7 +30,7 @@ export default async function dashboardRoutes(app: FastifyInstance) {
         // the day whenever the process isn't running in UTC (e.g. a server set to IST shifts it
         // back by a day). Comparing the raw 'YYYY-MM-DD' text avoids that round-trip entirely.
         const leadsRes = await client.query(
-          `SELECT l.lead_id, l.created_at, l.site_visit_date::text AS site_visit_date, rs.status_name
+          `SELECT l.lead_id, l.created_at, l.assigned_to, l.site_visit_date::text AS site_visit_date, rs.status_name
            FROM leads l JOIN ref_lead_statuses rs ON rs.status_id = l.status_id
            WHERE l.org_id = $1 AND l.is_deleted = FALSE AND l.lead_id = ANY($2::int[])`,
           [orgId, visible]
@@ -44,6 +45,7 @@ export default async function dashboardRoutes(app: FastifyInstance) {
           leadsByStatus[row.status_name] = (leadsByStatus[row.status_name] ?? 0) + 1;
           if (row.status_name === 'Won') wonLeads++;
           if (row.status_name === 'Lost') lostLeads++;
+          if (row.assigned_to == null) unassignedLeads++;
           // created_at is a timestamptz, so its date-of-day also depends on IST, not UTC.
           if (row.created_at && new Date(row.created_at).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }) === todayStr) {
             newLeadsToday++;
@@ -61,6 +63,18 @@ export default async function dashboardRoutes(app: FastifyInstance) {
         [orgId]
       );
 
+      // frontend dashboard (non-member) mirrors the prototype's "Active team members" /
+      // "Active projects" metrics, which need the org's plan limits and active user count -
+      // neither of which the rest of this payload otherwise carries.
+      const orgRes = await client.query(
+        `SELECT subscription_plan, max_users, max_projects FROM organizations WHERE org_id = $1`,
+        [orgId]
+      );
+      const usersRes = await client.query(
+        `SELECT COUNT(*) AS active_users FROM users WHERE org_id = $1 AND is_active = TRUE`,
+        [orgId]
+      );
+
       return {
         data: {
           totalLeads,
@@ -69,8 +83,13 @@ export default async function dashboardRoutes(app: FastifyInstance) {
           lostLeads,
           siteVisitsToday,
           openLeads,
+          unassignedLeads,
           leadsByStatus,
-          projects: projectsRes.rows.map(mapProjectRow)
+          projects: projectsRes.rows.map(mapProjectRow),
+          activeUsers: Number(usersRes.rows[0]?.active_users ?? 0),
+          maxUsers: orgRes.rows[0]?.max_users ?? null,
+          maxProjects: orgRes.rows[0]?.max_projects ?? null,
+          subscriptionPlan: orgRes.rows[0]?.subscription_plan ?? null
         }
       };
     });

@@ -114,8 +114,13 @@ export interface DashboardSummary {
   lostLeads: number;
   siteVisitsToday: number;
   openLeads: number;
+  unassignedLeads?: number;
   leadsByStatus?: Record<string, number>;
   projects?: Project[];
+  activeUsers?: number;
+  maxUsers?: number | null;
+  maxProjects?: number | null;
+  subscriptionPlan?: string | null;
 }
 
 export interface UsersBreakdown {
